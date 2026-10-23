@@ -1,7 +1,8 @@
-"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, crawl, and session bridging."""
+"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, crawl, image reverse search, and document audit."""
 
 import asyncio
 import csv
+import hashlib
 import json
 import os
 import re
@@ -14,9 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+import docx
 import httpx
+import pypdf
 import requests
 from bs4 import BeautifulSoup
+from PicImageSearch import Network, Yandex
 from rich.console import Console
 from rich.table import Table
 
@@ -62,6 +66,30 @@ class CrawlResult:
     aggregated_phones: List[str] = field(default_factory=list)
 
 
+@dataclass
+class ImageSearchResult:
+    engine: str
+    title: str
+    url: str
+    thumbnail_url: str = ""
+    source: str = "reverse_image"
+
+
+@dataclass
+class DocumentAuditResult:
+    file_path: str
+    file_name: str
+    file_size_bytes: int
+    file_type: str
+    sha256: str
+    char_count: int
+    extracted_text_preview: str
+    extracted_emails: List[str] = field(default_factory=list)
+    extracted_phones: List[str] = field(default_factory=list)
+    hash_leak_matches: List[SearchResult] = field(default_factory=list)
+    similarity_leak_matches: List[SearchResult] = field(default_factory=list)
+
+
 def extract_osint_entities(text: str) -> Dict[str, List[str]]:
     """Extracts email addresses and phone numbers from arbitrary text."""
     emails = list(set(EMAIL_REGEX.findall(text)))
@@ -84,7 +112,6 @@ def parse_cookie_file(cookie_file_path: str) -> Dict[str, str]:
         return cookies
 
     content = path.read_text(encoding="utf-8", errors="ignore")
-    # Try parsing as JSON first
     try:
         data = json.loads(content)
         if isinstance(data, list):
@@ -98,7 +125,6 @@ def parse_cookie_file(cookie_file_path: str) -> Dict[str, str]:
     except Exception:
         pass
 
-    # Parse as standard Netscape format
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -406,7 +432,6 @@ class ContentFetcher:
             status_code = r.status_code
             soup = BeautifulSoup(r.text, "html.parser")
 
-            # Remove scripts, styles, metadata
             for element in soup(["script", "style", "nav", "footer", "noscript"]):
                 element.decompose()
 
@@ -491,14 +516,12 @@ class AsyncCrawler:
                 continue
             visited.add(norm_url)
 
-            # Fetch page content
             res = await self.fetcher.fetch(current_url)
             if res.status_code == 200:
                 pages.append(res)
                 all_emails.update(res.extracted_emails)
                 all_phones.update(res.extracted_phones)
 
-                # Save locally if requested
                 if self.download_dir:
                     safe_filename = re.sub(r"[^\w\-.]", "_", current_url)[:120] + ".txt"
                     save_path = self.download_dir / safe_filename
@@ -507,7 +530,6 @@ class AsyncCrawler:
                         encoding="utf-8",
                     )
 
-                # Discover new links if within depth
                 if depth < self.max_depth:
                     new_links = self._extract_links(current_url, res.content)
                     for link in new_links:
@@ -524,10 +546,7 @@ class AsyncCrawler:
         )
 
     def _extract_links(self, page_url: str, text_content: str) -> List[str]:
-        """Extracts and resolves absolute links on the same host if required."""
-        # Fast HTML re-fetch parse for <a> hrefs
         links: List[str] = []
-        # Re-parse raw soup links from fetcher
         try:
             is_onion = ".onion" in page_url.lower()
             proxies = (
@@ -557,6 +576,153 @@ class AsyncCrawler:
         return links
 
 
+class ReverseImageSearcher:
+    """Asynchronous reverse image search engine utilizing PicImageSearch (Yandex & Google)."""
+
+    def __init__(self, proxy: Optional[str] = None):
+        self.proxy = proxy
+
+    async def search(
+        self,
+        image_path: str,
+        limit: int = 20,
+    ) -> List[ImageSearchResult]:
+        path = Path(image_path)
+        if not path.is_file():
+            return []
+
+        results: List[ImageSearchResult] = []
+        try:
+            async with Network(proxies=self.proxy) as client:
+                yandex = Yandex(client=client)
+                resp = await yandex.search(file=path)
+                for item in resp.raw[:limit]:
+                    results.append(
+                        ImageSearchResult(
+                            engine="yandex",
+                            title=getattr(item, "title", "No Title") or "No Title",
+                            url=getattr(item, "url", "") or "",
+                            thumbnail_url=getattr(item, "thumbnail", "") or "",
+                        )
+                    )
+        except Exception as e:
+            if CONFIG.debug:
+                print(f"[ReverseImageSearcher:Yandex] Error: {e}", file=sys.stderr)
+
+        return results
+
+
+class DocumentAuditor:
+    """Audits local files (PDF, DOCX, TXT, MD, CSV) for metadata, SHA256, OSINT entities, and online leaks/plagiarism."""
+
+    def __init__(self, surface_searcher: SurfaceSearcher, onion_searcher: OnionSearcher):
+        self.surface = surface_searcher
+        self.onion = onion_searcher
+
+    def extract_text_and_meta(self, file_path: str) -> tuple[str, str, int, str]:
+        path = Path(file_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Document not found: {file_path}")
+
+        file_bytes = path.read_bytes()
+        sha256 = hashlib.sha256(file_bytes).hexdigest()
+        file_size = len(file_bytes)
+        ext = path.suffix.lower()
+
+        extracted_text = ""
+        file_type = ext.replace(".", "").upper() or "UNKNOWN"
+
+        if ext == ".pdf":
+            # 1. Try pdftotext CLI first (ultra fast C binary)
+            proc = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True)
+            if proc.returncode == 0 and proc.stdout.strip():
+                extracted_text = proc.stdout.strip()
+            else:
+                # Fallback to pypdf
+                try:
+                    reader = pypdf.PdfReader(str(path))
+                    extracted_text = "\n".join(
+                        page.extract_text() or "" for page in reader.pages
+                    ).strip()
+                except Exception:
+                    pass
+
+            # If still empty (e.g. scanned PDF), try local tesseract OCR
+            if not extracted_text:
+                ocr_proc = subprocess.run(["tesseract", str(path), "stdout"], capture_output=True, text=True)
+                if ocr_proc.returncode == 0:
+                    extracted_text = ocr_proc.stdout.strip()
+
+        elif ext == ".docx":
+            try:
+                doc = docx.Document(str(path))
+                extracted_text = "\n".join(p.text for p in doc.paragraphs if p.text).strip()
+            except Exception:
+                pass
+
+        else:
+            # Plain text, Markdown, CSV, source code
+            try:
+                extracted_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            except Exception:
+                pass
+
+        return extracted_text, sha256, file_size, file_type
+
+    async def audit(
+        self,
+        file_path: str,
+        check_leak: bool = True,
+        check_plagiarism: bool = True,
+        onion_check: bool = False,
+        limit: int = 5,
+    ) -> DocumentAuditResult:
+        path = Path(file_path)
+        extracted_text, sha256, file_size, file_type = self.extract_text_and_meta(file_path)
+        entities = extract_osint_entities(extracted_text)
+
+        hash_matches: List[SearchResult] = []
+        similarity_matches: List[SearchResult] = []
+
+        if check_leak:
+            # 1. Search for SHA256 checksum leak on Surface and Onion
+            tasks = [self.surface.search(query=sha256, limit=limit)]
+            if onion_check:
+                tasks.append(self.onion.search(query=sha256, limit=limit))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, list):
+                    hash_matches.extend(r)
+
+        if check_plagiarism and extracted_text:
+            # 2. Extract significant sentence fragments for plagiarism & similarity detection
+            lines = [l.strip() for l in extracted_text.splitlines() if len(l.strip()) > 40]
+            if lines:
+                sample_quote = lines[0][:80].replace('"', "")
+                query = f'"{sample_quote}"'
+                tasks = [self.surface.search(query=query, limit=limit)]
+                if onion_check:
+                    tasks.append(self.onion.search(query=query, limit=limit))
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, list):
+                        similarity_matches.extend(r)
+
+        return DocumentAuditResult(
+            file_path=str(path.resolve()),
+            file_name=path.name,
+            file_size_bytes=file_size,
+            file_type=file_type,
+            sha256=sha256,
+            char_count=len(extracted_text),
+            extracted_text_preview=extracted_text[:300].replace("\n", " ").strip(),
+            extracted_emails=entities["emails"],
+            extracted_phones=entities["phones"],
+            hash_leak_matches=deduplicate(hash_matches),
+            similarity_leak_matches=deduplicate(similarity_matches),
+        )
+
+
 def filter_results(
     results: List[SearchResult],
     site: Optional[str] = None,
@@ -564,7 +730,6 @@ def filter_results(
     must_have_email: bool = False,
     must_have_phone: bool = False,
 ) -> List[SearchResult]:
-    """Applies client-side surgical filtering on site domains, regex, emails, and phones."""
     filtered = results
 
     if site:
@@ -592,7 +757,6 @@ def filter_results(
 
 
 def deduplicate(results: List[SearchResult]) -> List[SearchResult]:
-    """Deterministic deduplication based on normalized URL."""
     seen = set()
     unique: List[SearchResult] = []
     for r in results:
@@ -610,7 +774,6 @@ def render_rich_table(
     title_prefix: str = "Search Results",
     show_intel: bool = False,
 ):
-    """Renders results in a stylish Rich terminal table with optional OSINT data."""
     console = Console()
     table = Table(
         title=f"🔎 [bold cyan]xsearch[/bold cyan] — {title_prefix} ({len(results)} matches)",
@@ -656,7 +819,6 @@ def output_results(
     query: str = "",
     show_intel: bool = False,
 ):
-    """Outputs search results in JSON, CSV, Markdown, or Rich Table."""
     if output_format == "json":
         print(json.dumps([asdict(r) for r in results], indent=2, ensure_ascii=False))
     elif output_format == "csv":
@@ -685,7 +847,6 @@ def output_results(
 
 
 def output_fetch_result(result: FetchResult, output_format: str):
-    """Outputs content fetch results in JSON, Markdown, or terminal text."""
     console = Console()
     if output_format == "json":
         print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
@@ -710,7 +871,6 @@ def output_fetch_result(result: FetchResult, output_format: str):
 
 
 def output_crawl_result(result: CrawlResult, output_format: str):
-    """Outputs crawl results in JSON, Markdown, or Rich Table."""
     console = Console()
     if output_format == "json":
         print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
@@ -745,3 +905,91 @@ def output_crawl_result(result: CrawlResult, output_format: str):
         console.print(table)
         console.print(f"\n[bold green]Aggregated Emails ({len(result.aggregated_emails)}):[/bold green] {', '.join(result.aggregated_emails) if result.aggregated_emails else 'None'}")
         console.print(f"[bold green]Aggregated Phones ({len(result.aggregated_phones)}):[/bold green] {', '.join(result.aggregated_phones) if result.aggregated_phones else 'None'}\n")
+
+
+def output_image_results(results: List[ImageSearchResult], output_format: str, image_path: str):
+    console = Console()
+    if output_format == "json":
+        print(json.dumps([asdict(r) for r in results], indent=2, ensure_ascii=False))
+    elif output_format == "md":
+        print(f"# Reverse Image Search: {Path(image_path).name}\n")
+        for r in results:
+            print(f"- [{r.engine.upper()}] **[{r.title}]({r.url})**")
+            if r.thumbnail_url:
+                print(f"  *Thumbnail:* {r.thumbnail_url}")
+    else:
+        table = Table(
+            title=f"🖼️ [bold cyan]xsearch image[/bold cyan] — {Path(image_path).name} ({len(results)} matches)",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Engine", style="green", width=10)
+        table.add_column("Page Title", style="white", ratio=3)
+        table.add_column("Matched URL", style="blue underline", ratio=3)
+
+        for idx, r in enumerate(results, 1):
+            table.add_row(str(idx), r.engine.upper(), r.title[:50], r.url)
+
+        console.print(table)
+
+
+def output_doc_audit(audit: DocumentAuditResult, output_format: str):
+    console = Console()
+    if output_format == "json":
+        print(json.dumps(asdict(audit), indent=2, ensure_ascii=False))
+    elif output_format == "md":
+        print(f"# Document Audit: {audit.file_name}\n")
+        print(f"- **File Type:** {audit.file_type} ({audit.file_size_bytes} bytes)")
+        print(f"- **SHA256:** `{audit.sha256}`")
+        print(f"- **Character Count:** {audit.char_count}")
+        print(f"- **Extracted Emails:** {', '.join(audit.extracted_emails) if audit.extracted_emails else 'None'}")
+        print(f"- **Extracted Phones:** {', '.join(audit.extracted_phones) if audit.extracted_phones else 'None'}\n")
+        print("## Checksum Leak Matches (Exact File Leaked):\n")
+        for m in audit.hash_leak_matches:
+            print(f"- [{m.category.upper()}] **[{m.title}]({m.url})** (`{m.source}`)")
+        if not audit.hash_leak_matches:
+            print("  *None detected.*")
+        print("\n## Content Similarity & Plagiarism Matches:\n")
+        for m in audit.similarity_leak_matches:
+            print(f"- [{m.category.upper()}] **[{m.title}]({m.url})** (`{m.source}`)")
+            if m.snippet:
+                print(f"  > {m.snippet[:180]}...")
+        if not audit.similarity_leak_matches:
+            print("  *None detected.*")
+    else:
+        console.print(f"\n📄 [bold cyan]Document Audit Report:[/bold cyan] [bold white]{audit.file_name}[/bold white]")
+        console.print(f"  • Format: [yellow]{audit.file_type}[/yellow] | Size: [dim]{audit.file_size_bytes} bytes[/dim] | Chars: {audit.char_count}")
+        console.print(f"  • SHA256: [bold green]{audit.sha256}[/bold green]")
+        if audit.extracted_emails:
+            console.print(f"  • Extracted Emails: [bold yellow]{', '.join(audit.extracted_emails)}[/bold yellow]")
+        if audit.extracted_phones:
+            console.print(f"  • Extracted Phones: [bold yellow]{', '.join(audit.extracted_phones)}[/bold yellow]")
+
+        console.print(f"\n[dim]Preview: {audit.extracted_text_preview}...[/dim]\n")
+
+        # Table for Hash Leaks
+        h_table = Table(title="🔒 SHA256 Checksum Leaks (Exact File Exposure)", show_header=True, header_style="bold red")
+        h_table.add_column("#", style="dim", width=4)
+        h_table.add_column("Tier", style="bold", width=9)
+        h_table.add_column("Title", style="white", ratio=2)
+        h_table.add_column("URL", style="blue underline", ratio=3)
+        for idx, m in enumerate(audit.hash_leak_matches, 1):
+            h_table.add_row(str(idx), m.category.upper(), m.title[:40], m.url)
+        if not audit.hash_leak_matches:
+            h_table.add_row("-", "CLEAR", "No exact SHA256 file leak detected on web/darknet", "-")
+        console.print(h_table)
+
+        # Table for Similarity Leaks
+        s_table = Table(title="📝 Content Similarity & Plagiarism Exposure", show_header=True, header_style="bold yellow")
+        s_table.add_column("#", style="dim", width=4)
+        s_table.add_column("Tier", style="bold", width=9)
+        s_table.add_column("Title & Excerpt", style="white", ratio=2)
+        s_table.add_column("URL", style="blue underline", ratio=3)
+        for idx, m in enumerate(audit.similarity_leak_matches, 1):
+            content = f"{m.title}\n[dim]{m.snippet[:120]}...[/dim]" if m.snippet else m.title
+            s_table.add_row(str(idx), m.category.upper(), content, m.url)
+        if not audit.similarity_leak_matches:
+            s_table.add_row("-", "CLEAR", "No verbatim paragraph/sentence matches found", "-")
+        console.print(s_table)
+        console.print()

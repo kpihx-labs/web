@@ -9,17 +9,17 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 ## 1) Metadata
 
 - `schema_version`: `xsearch.contract.v1`
-- `contract_version`: `1.1.0`
+- `contract_version`: `1.2.0`
 
 ---
 
 ## 2) Conventions
 
-- Multi-network search and crawl abstraction: Surface web (SearXNG API), Dark web (Tor .onion live), and Deep/Encrypted darknet (I2P eepsites).
+- Multi-network search, crawl, and multimodal media audit: Surface web (SearXNG API), Dark web (Tor .onion live), and Deep/Encrypted darknet (I2P eepsites).
 - Deterministic deduplication based on normalized URL (strips URL fragments, query parameters, scheme/www variances).
-- Subcommands: `search`, `fetch`, `crawl`, `similar`, and `engines`.
+- Subcommands: `search`, `fetch`, `crawl`, `image`, `doc`, `similar`, and `engines`.
 - Output channels: stdout format selection via `-f/--format` (`table`, `json`, `csv`, `md`, `text`).
-- Telemetry & error handling: errors in one network or page must never crash entire workflows (graceful degradation via `asyncio.gather` and exception boundary isolation).
+- Telemetry & error handling: errors in one network, image engine, or document parser must never crash entire workflows (graceful degradation via `asyncio.gather` and exception boundary isolation).
 - Zero censorship & zero hardcoded bounds: arbitrary page limits, recursive depths (`-D/--depth`), custom cookies (`-C/--cookie-file`), custom headers (`-H/--header`), and proxy overrides (`--proxy`).
 
 ---
@@ -41,28 +41,31 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 | `extracted_emails` | `List[str]` | Discovered email addresses via OSINT regex |
 | `extracted_phones` | `List[str]` | Discovered phone numbers via OSINT regex |
 
-### `FetchResult`
+### `ImageSearchResult`
 
 | Field | Type | Description |
 |---|---|---|
-| `url` | `str` | Target URL fetched |
-| `title` | `str` | Extracted page title |
-| `content` | `str` | Clean textual content (scripts and styles stripped) |
-| `text_length` | `int` | Character count of clean text |
-| `status_code` | `int` | HTTP response status code |
-| `category` | `str` | Network category (`surface`, `onion`, `i2p`) |
-| `extracted_emails` | `List[str]` | Email addresses extracted from body |
-| `extracted_phones` | `List[str]` | Phone numbers extracted from body |
+| `engine` | `str` | Visual search engine (`yandex`, `google`, `bing`) |
+| `title` | `str` | Page title hosting the matching visual |
+| `url` | `str` | Target URL containing the identical or similar image |
+| `thumbnail_url` | `str` | Engine-generated thumbnail preview URL |
+| `source` | `str` | Source identifier (`reverse_image`) |
 
-### `CrawlResult`
+### `DocumentAuditResult`
 
 | Field | Type | Description |
 |---|---|---|
-| `base_url` | `str` | Seed entry URL for recursive crawling |
-| `total_pages_visited` | `int` | Count of successfully processed pages |
-| `pages` | `List[FetchResult]`| Detailed results per visited page |
-| `aggregated_emails` | `List[str]` | Unique sorted emails across all crawled pages |
-| `aggregated_phones` | `List[str]` | Unique sorted phones across all crawled pages |
+| `file_path` | `str` | Canonical local file path |
+| `file_name` | `str` | Basename of audited document |
+| `file_size_bytes` | `int` | Document size in bytes |
+| `file_type` | `str` | Detected format (`PDF`, `DOCX`, `MD`, `TXT`, `CSV`) |
+| `sha256` | `str` | Cryptographic SHA256 file checksum |
+| `char_count` | `int` | Extracted textual character count |
+| `extracted_text_preview` | `str` | Clean excerpt preview |
+| `extracted_emails` | `List[str]` | Discovered email addresses |
+| `extracted_phones` | `List[str]` | Discovered phone numbers |
+| `hash_leak_matches` | `List[SearchResult]` | Search results matching the exact SHA256 hash |
+| `similarity_leak_matches`| `List[SearchResult]` | Search results matching verbatim sentence fragments |
 
 ---
 
@@ -71,6 +74,7 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 - `UPSTREAM_TIMEOUT`: Engine, page, or SOCKS5 relay timed out after `--timeout` parameter.
 - `UPSTREAM_UNREACHABLE`: SOCKS5 handshake failure or hidden service descriptor absent.
 - `PARSE_ERROR`: HTML structure divergence in scraping targets.
+- `IMAGE_LOOKUP_FAILED`: Reverse visual search engine changed DOM structure or triggered Cloudflare/Turnstile.
 - `AUTH_BLOCKED`: HTTP 401/403 requiring cookie injection or session handover via `browser-proxy`.
 
 ---

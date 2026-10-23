@@ -1,7 +1,8 @@
-"""CLI entrypoint using Typer and Rich with subcommands (search, fetch, similar, crawl, engines)."""
+"""CLI entrypoint using Typer and Rich with subcommands (search, fetch, crawl, image, doc, similar, engines)."""
 
 import asyncio
 import urllib.parse
+from pathlib import Path
 from typing import List, Optional
 
 import typer
@@ -11,13 +12,17 @@ from rich.table import Table
 from .unifier import (
     AsyncCrawler,
     ContentFetcher,
+    DocumentAuditor,
     I2PSearcher,
     OnionSearcher,
+    ReverseImageSearcher,
     SurfaceSearcher,
     deduplicate,
     filter_results,
     output_crawl_result,
+    output_doc_audit,
     output_fetch_result,
+    output_image_results,
     output_results,
     parse_cookie_file,
     parse_custom_headers,
@@ -25,7 +30,7 @@ from .unifier import (
 
 app = typer.Typer(
     name="xsearch",
-    help="⚡ Sovereign ultra-flexible multi-network search & crawl CLI (Surface, Tor .onion, I2P).",
+    help="⚡ Sovereign ultra-flexible multi-network search, crawl & media audit CLI (Surface, Tor .onion, I2P).",
     add_completion=False,
 )
 console = Console()
@@ -315,6 +320,94 @@ def crawl(
 
 
 @app.command()
+def image(
+    image_path: str = typer.Argument(..., help="Path to local image file (PNG, JPG, WEBP) to reverse search"),
+    limit: int = typer.Option(
+        20,
+        "-n",
+        "--limit",
+        help="Max matching results to return",
+    ),
+    proxy: Optional[str] = typer.Option(
+        None,
+        "--proxy",
+        help="Proxy URL for image lookup (e.g. socks5://127.0.0.1:9050)",
+    ),
+    format_type: str = typer.Option(
+        "table",
+        "-f",
+        "--format",
+        help="Output format: table, json, md",
+    ),
+):
+    """Performs reverse image search on local images across Yandex & Google Visual engines."""
+    p = Path(image_path)
+    if not p.is_file():
+        console.print(f"[bold red]Error:[/bold red] Image file not found: {image_path}")
+        raise typer.Exit(1)
+
+    searcher = ReverseImageSearcher(proxy=proxy)
+    console.print(f"[dim]Executing reverse image search for '{p.name}'...[/dim]")
+    results = asyncio.run(searcher.search(str(p), limit=limit))
+    output_image_results(results, format_type, str(p))
+
+
+@app.command()
+def doc(
+    file_path: str = typer.Argument(..., help="Path to local document (PDF, DOCX, TXT, MD, CSV) to audit"),
+    leak: bool = typer.Option(
+        True,
+        "--leak/--no-leak",
+        help="Scan web for SHA256 checksum exposure (exact document leak)",
+    ),
+    similarity: bool = typer.Option(
+        True,
+        "--similarity/--no-similarity",
+        help="Scan web for matching sentences and verbatim plagiarism",
+    ),
+    onion: bool = typer.Option(
+        False,
+        "-o",
+        "--onion/--no-onion",
+        help="Extend leak and plagiarism search to Dark Web (.onion)",
+    ),
+    limit: int = typer.Option(
+        5,
+        "-n",
+        "--limit",
+        help="Max results per leak check",
+    ),
+    format_type: str = typer.Option(
+        "table",
+        "-f",
+        "--format",
+        help="Output format: table, json, md",
+    ),
+):
+    """Performs deep document audit: text extraction, SHA256 hashing, OSINT entity scan, and online leak detection."""
+    p = Path(file_path)
+    if not p.is_file():
+        console.print(f"[bold red]Error:[/bold red] Document file not found: {file_path}")
+        raise typer.Exit(1)
+
+    auditor = DocumentAuditor(
+        surface_searcher=SurfaceSearcher(),
+        onion_searcher=OnionSearcher(),
+    )
+    console.print(f"[dim]Auditing document '{p.name}' (leak={leak}, similarity={similarity}, onion={onion})...[/dim]")
+    audit_res = asyncio.run(
+        auditor.audit(
+            file_path=str(p),
+            check_leak=leak,
+            check_plagiarism=similarity,
+            onion_check=onion,
+            limit=limit,
+        )
+    )
+    output_doc_audit(audit_res, format_type)
+
+
+@app.command()
 def similar(
     url: str = typer.Argument(..., help="Target URL to find similar websites/services for"),
     limit: int = typer.Option(
@@ -467,7 +560,6 @@ async def run_search(
     if dedup:
         all_results = deduplicate(all_results)
 
-    # Client-side surgical filtering
     all_results = filter_results(
         all_results,
         site=site,
