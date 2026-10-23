@@ -1,6 +1,7 @@
-"""CLI entrypoint using Typer and Rich with comprehensive options."""
+"""CLI entrypoint using Typer and Rich with subcommands (search, fetch, similar)."""
 
 import asyncio
+import urllib.parse
 from typing import Optional
 
 import typer
@@ -8,11 +9,13 @@ from rich.console import Console
 from rich.table import Table
 
 from .unifier import (
+    ContentFetcher,
     I2PSearcher,
     OnionSearcher,
     SurfaceSearcher,
     deduplicate,
     filter_results,
+    output_fetch_result,
     output_results,
 )
 
@@ -26,7 +29,7 @@ console = Console()
 
 @app.command()
 def search(
-    query: Optional[str] = typer.Argument(None, help="Search query string"),
+    query: str = typer.Argument(..., help="Search query string"),
     # Network Selection
     surface: bool = typer.Option(
         True,
@@ -141,22 +144,8 @@ def search(
         "--dedup/--no-dedup",
         help="Deterministic URL deduplication",
     ),
-    # Engine discovery
-    list_engines: bool = typer.Option(
-        False,
-        "--list-engines",
-        help="List all active SearXNG engines and exit",
-    ),
 ):
-    """Executes multi-network search queries."""
-    if list_engines:
-        asyncio.run(show_engines())
-        return
-
-    if not query:
-        console.print("[bold red]Error:[/bold red] Missing search query. Use 'xsearch --help' for options.")
-        raise typer.Exit(1)
-
+    """Executes multi-network search queries across Surface, Tor, and I2P."""
     asyncio.run(
         run_search(
             query=query,
@@ -181,6 +170,85 @@ def search(
             dedup=dedup,
         )
     )
+
+
+@app.command()
+def fetch(
+    url: str = typer.Argument(..., help="Clearnet or .onion URL to fetch"),
+    format_type: str = typer.Option(
+        "text",
+        "-f",
+        "--format",
+        help="Output format: text, json, md",
+    ),
+    timeout: float = typer.Option(
+        30.0,
+        "--timeout",
+        help="Network timeout in seconds",
+    ),
+):
+    """Fetches clean text and extracts OSINT intelligence (emails/phones) from any URL or .onion."""
+    fetcher = ContentFetcher(timeout=timeout)
+    result = asyncio.run(fetcher.fetch(url))
+    output_fetch_result(result, format_type)
+
+
+@app.command()
+def similar(
+    url: str = typer.Argument(..., help="Target URL to find similar websites/services for"),
+    limit: int = typer.Option(
+        10,
+        "-n",
+        "--limit",
+        help="Maximum similar results to return",
+    ),
+    format_type: str = typer.Option(
+        "table",
+        "-f",
+        "--format",
+        help="Output format: table, json, csv, md",
+    ),
+):
+    """Finds alternative and related platforms for a target website or URL."""
+    parsed = urllib.parse.urlparse(url)
+    target_host = parsed.netloc or parsed.path.split("/")[0]
+
+    domain_clean = target_host.replace("www.", "").rstrip("/")
+    service_name = domain_clean.split(".")[0]
+
+    query = f"alternative to {service_name} OR related {domain_clean}"
+
+    console.print(f"[dim]Discovering platforms similar and related to '{domain_clean}'...[/dim]")
+    asyncio.run(
+        run_search(
+            query=query,
+            surface=True,
+            onion=False,
+            i2p=False,
+            engines="brave,bing,duckduckgo",
+            categories=None,
+            site=None,
+            regex=None,
+            has_email=False,
+            has_phone=False,
+            show_intel=False,
+            limit=limit,
+            page=1,
+            safe_search=0,
+            lang="all",
+            time_range=None,
+            transport="direct",
+            timeout=20.0,
+            format_type=format_type,
+            dedup=True,
+        )
+    )
+
+
+@app.command(name="engines")
+def list_engines():
+    """Lists all configured and available engines from SearXNG."""
+    asyncio.run(show_engines())
 
 
 async def show_engines():

@@ -1,4 +1,4 @@
-"""Core multi-network unifier engine for xsearch with regex and OSINT extraction."""
+"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, and similar."""
 
 import asyncio
 import csv
@@ -20,7 +20,7 @@ from rich.table import Table
 
 from .config import CONFIG
 
-# Regex patterns for intelligence extraction
+# Regex patterns for OSINT entity extraction
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 PHONE_REGEX = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{2,4}[-.\s]?\d{2,9}")
 
@@ -39,16 +39,27 @@ class SearchResult:
     extracted_phones: List[str] = field(default_factory=list)
 
 
+@dataclass
+class FetchResult:
+    url: str
+    title: str
+    content: str
+    text_length: int
+    status_code: int
+    category: str
+    extracted_emails: List[str] = field(default_factory=list)
+    extracted_phones: List[str] = field(default_factory=list)
+
+
 def extract_osint_entities(text: str) -> Dict[str, List[str]]:
     """Extracts email addresses and phone numbers from arbitrary text."""
     emails = list(set(EMAIL_REGEX.findall(text)))
-    # Filter phone numbers to avoid tiny digit sequences
     raw_phones = PHONE_REGEX.findall(text)
     phones = list(
         set(
             p.strip()
             for p in raw_phones
-            if len(re.sub(r"\D", "", p)) >= 8 and len(re.sub(r"\D", "", p)) <= 15
+            if 8 <= len(re.sub(r"\D", "", p)) <= 15
         )
     )
     return {"emails": emails, "phones": phones}
@@ -198,7 +209,6 @@ class OnionSearcher:
     def _search_with_wrapper(
         self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
     ) -> List[SearchResult]:
-        """Executes search inside oniux or torsocks wrapper if requested."""
         wrapper = shutil.which(self.transport)
         if not wrapper:
             return self._search_tor66_direct(query, limit=limit, timeout=timeout)
@@ -270,6 +280,74 @@ class I2PSearcher:
         self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
     ) -> List[SearchResult]:
         return []
+
+
+class ContentFetcher:
+    """Fetches clean text and OSINT entities from arbitrary Clearnet or .onion URLs."""
+
+    def __init__(
+        self,
+        tor_proxy: str = CONFIG.tor_proxy,
+        timeout: float = CONFIG.default_timeout_s,
+    ):
+        self.tor_proxy = tor_proxy
+        self.timeout = timeout
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"
+        }
+
+    def _fetch_sync(self, url: str) -> FetchResult:
+        is_onion = ".onion" in url.lower()
+        category = "onion" if is_onion else "surface"
+        proxies = (
+            {"http": self.tor_proxy, "https": self.tor_proxy}
+            if is_onion
+            else None
+        )
+
+        try:
+            r = requests.get(
+                url,
+                proxies=proxies,
+                headers=self.headers,
+                timeout=self.timeout,
+            )
+            status_code = r.status_code
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            # Remove scripts, styles, metadata
+            for element in soup(["script", "style", "nav", "footer", "noscript"]):
+                element.decompose()
+
+            title = soup.title.string.strip() if soup.title and soup.title.string else url
+            text_lines = [
+                line.strip() for line in soup.get_text().splitlines() if line.strip()
+            ]
+            clean_text = "\n".join(text_lines)
+            entities = extract_osint_entities(clean_text)
+
+            return FetchResult(
+                url=url,
+                title=title,
+                content=clean_text,
+                text_length=len(clean_text),
+                status_code=status_code,
+                category=category,
+                extracted_emails=entities["emails"],
+                extracted_phones=entities["phones"],
+            )
+        except Exception as e:
+            return FetchResult(
+                url=url,
+                title="Fetch Error",
+                content=f"Error fetching {url}: {e}",
+                text_length=0,
+                status_code=500,
+                category=category,
+            )
+
+    async def fetch(self, url: str) -> FetchResult:
+        return await asyncio.to_thread(self._fetch_sync, url)
 
 
 def filter_results(
@@ -371,7 +449,7 @@ def output_results(
     query: str = "",
     show_intel: bool = False,
 ):
-    """Outputs results in JSON, CSV, Markdown, or Rich Table."""
+    """Outputs search results in JSON, CSV, Markdown, or Rich Table."""
     if output_format == "json":
         print(json.dumps([asdict(r) for r in results], indent=2, ensure_ascii=False))
     elif output_format == "csv":
@@ -397,3 +475,28 @@ def output_results(
         render_rich_table(
             results, title_prefix=f"Query: '{query}'", show_intel=show_intel
         )
+
+
+def output_fetch_result(result: FetchResult, output_format: str):
+    """Outputs content fetch results in JSON, Markdown, or terminal text."""
+    console = Console()
+    if output_format == "json":
+        print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
+    elif output_format == "md":
+        print(f"# {result.title}\n")
+        print(f"**URL:** {result.url} (Status: {result.status_code})\n")
+        if result.extracted_emails:
+            print(f"**Extracted Emails:** {', '.join(result.extracted_emails)}")
+        if result.extracted_phones:
+            print(f"**Extracted Phones:** {', '.join(result.extracted_phones)}")
+        print("\n---\n")
+        print(result.content)
+    else:
+        console.print(f"[bold cyan]URL:[/bold cyan] {result.url} [dim]({result.status_code})[/dim]")
+        console.print(f"[bold green]Title:[/bold green] {result.title}")
+        if result.extracted_emails:
+            console.print(f"[bold yellow]Emails:[/bold yellow] {', '.join(result.extracted_emails)}")
+        if result.extracted_phones:
+            console.print(f"[bold yellow]Phones:[/bold yellow] {', '.join(result.extracted_phones)}")
+        console.print("\n[dim]─── Content Preview ───[/dim]\n")
+        console.print(result.content)
