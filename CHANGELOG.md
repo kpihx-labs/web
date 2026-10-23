@@ -1,12 +1,18 @@
 # CHANGELOG — xsearch
 
+## [1.3.0] - 2026-10-23
+- Implemented EXIF metadata & GPS geolocation parsing in `xsearch image` using `exifread`: extraction of camera make/model, original date, altitude, and decimal GPS latitude/longitude with direct OpenStreetMap URL mapping.
+- Implemented Wayback Machine API verification in `xsearch doc`: checks whether URLs embedded in documents have historical archived snapshots with timestamp and direct link.
+- Implemented autonomous dark-themed HTML reporting (`--report <path.html>`) across `search`, `crawl`, `image`, and `doc`.
+- Implemented universal auto-save mimicking Exa CLI design: every execution automatically serializes its JSON payload with ISO timestamp to `/tmp/xsearch-results/` (overridable via `--save-dir` or opt-out via `--no-save`).
+- Updated `CONTRACT.md` to schema version `xsearch.contract.v1` v1.3.0 and `pyproject.toml` to v1.3.0.
+
 ## [1.2.0] - 2026-10-23
 - Implemented `xsearch image <file>`: asynchronous reverse image search using `PicImageSearch` across Yandex Visual and Google Lens.
 - Implemented `xsearch doc <file>`: universal multimodal document audit for PDF, DOCX, Markdown, TXT, and CSV.
 - Integrated multi-engine PDF parsing pipeline: fast C-native `pdftotext`, `pypdf`, and `tesseract` OCR for scanned documents.
 - Integrated automated SHA256 file checksum leak detection and verbatim sentence similarity / plagiarism detection across Surface Web and Tor Darknet.
 - Documented system dependencies (`poppler-utils`, `tesseract-ocr`, `tor`) in `README.md`.
-- Updated `CONTRACT.md` to schema version `xsearch.contract.v1` v1.2.0.
 
 ## [1.1.0] - 2026-10-23
 - Implemented recursive asynchronous web crawler subcommand: `xsearch crawl <url> [-D/--depth] [-n/--max-pages] [--stay-domain/--cross-domain] [--download-dir]`.

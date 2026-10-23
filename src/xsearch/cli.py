@@ -17,6 +17,7 @@ from .unifier import (
     OnionSearcher,
     ReverseImageSearcher,
     SurfaceSearcher,
+    auto_save_results,
     deduplicate,
     filter_results,
     output_crawl_result,
@@ -153,6 +154,22 @@ def search(
         "--header",
         help="Custom header in 'Key: Value' format (can be specified multiple times)",
     ),
+    # Reporting & Auto-save
+    report: Optional[str] = typer.Option(
+        None,
+        "--report",
+        help="Export autonomous HTML investigation report to specified path",
+    ),
+    save_dir: Optional[str] = typer.Option(
+        None,
+        "--save-dir",
+        help="Override default auto-save directory (/tmp/xsearch-results/)",
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Disable automatic JSON payload autosave to disk",
+    ),
     # Output formatting
     format_type: str = typer.Option(
         "table",
@@ -194,6 +211,9 @@ def search(
             dedup=dedup,
             custom_cookies=cookies_map,
             custom_headers=headers_map,
+            report_file=report,
+            save_dir=save_dir,
+            no_save=no_save,
         )
     )
 
@@ -229,6 +249,16 @@ def fetch(
         "--proxy",
         help="Override proxy URL (e.g. http://127.0.0.1:8080 or socks5h://...)",
     ),
+    save_dir: Optional[str] = typer.Option(
+        None,
+        "--save-dir",
+        help="Override default auto-save directory (/tmp/xsearch-results/)",
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Disable automatic JSON payload autosave to disk",
+    ),
 ):
     """Fetches clean text and extracts OSINT intelligence (emails/phones) from any URL or .onion."""
     cookies_map = parse_cookie_file(cookie_file) if cookie_file else None
@@ -241,6 +271,11 @@ def fetch(
         headers=headers_map,
     )
     result = asyncio.run(fetcher.fetch(url))
+
+    if not no_save:
+        save_path = auto_save_results(result, prefix="fetch", custom_dir=save_dir)
+        console.print(f"[dim]Autosaved result to: {save_path}[/dim]")
+
     output_fetch_result(result, format_type)
 
 
@@ -291,6 +326,21 @@ def crawl(
         "--timeout",
         help="Per-page request timeout in seconds",
     ),
+    report: Optional[str] = typer.Option(
+        None,
+        "--report",
+        help="Export autonomous HTML crawl report",
+    ),
+    save_dir: Optional[str] = typer.Option(
+        None,
+        "--save-dir",
+        help="Override default auto-save directory (/tmp/xsearch-results/)",
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Disable automatic JSON payload autosave to disk",
+    ),
     format_type: str = typer.Option(
         "table",
         "-f",
@@ -316,7 +366,12 @@ def crawl(
 
     console.print(f"[dim]Initiating recursive crawl on '{url}' (depth={depth}, max_pages={max_pages})...[/dim]")
     result = asyncio.run(crawler.crawl())
-    output_crawl_result(result, format_type)
+
+    if not no_save:
+        save_path = auto_save_results(result, prefix="crawl", custom_dir=save_dir)
+        console.print(f"[dim]Autosaved result to: {save_path}[/dim]")
+
+    output_crawl_result(result, format_type, report_file=report)
 
 
 @app.command()
@@ -333,6 +388,21 @@ def image(
         "--proxy",
         help="Proxy URL for image lookup (e.g. socks5://127.0.0.1:9050)",
     ),
+    report: Optional[str] = typer.Option(
+        None,
+        "--report",
+        help="Export autonomous HTML image investigation report",
+    ),
+    save_dir: Optional[str] = typer.Option(
+        None,
+        "--save-dir",
+        help="Override default auto-save directory (/tmp/xsearch-results/)",
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Disable automatic JSON payload autosave to disk",
+    ),
     format_type: str = typer.Option(
         "table",
         "-f",
@@ -340,7 +410,7 @@ def image(
         help="Output format: table, json, md",
     ),
 ):
-    """Performs reverse image search on local images across Yandex & Google Visual engines."""
+    """Performs reverse image search on local images across Yandex & Google Visual engines with EXIF GPS parsing."""
     p = Path(image_path)
     if not p.is_file():
         console.print(f"[bold red]Error:[/bold red] Image file not found: {image_path}")
@@ -348,8 +418,13 @@ def image(
 
     searcher = ReverseImageSearcher(proxy=proxy)
     console.print(f"[dim]Executing reverse image search for '{p.name}'...[/dim]")
-    results = asyncio.run(searcher.search(str(p), limit=limit))
-    output_image_results(results, format_type, str(p))
+    audit_res = asyncio.run(searcher.search(str(p), limit=limit))
+
+    if not no_save:
+        save_path = auto_save_results(audit_res, prefix=f"image_{p.stem}", custom_dir=save_dir)
+        console.print(f"[dim]Autosaved result to: {save_path}[/dim]")
+
+    output_image_results(audit_res, format_type, report_file=report)
 
 
 @app.command()
@@ -371,11 +446,31 @@ def doc(
         "--onion/--no-onion",
         help="Extend leak and plagiarism search to Dark Web (.onion)",
     ),
+    wayback: bool = typer.Option(
+        True,
+        "--wayback/--no-wayback",
+        help="Check Wayback Machine historical archive snapshots for embedded URLs",
+    ),
     limit: int = typer.Option(
         5,
         "-n",
         "--limit",
         help="Max results per leak check",
+    ),
+    report: Optional[str] = typer.Option(
+        None,
+        "--report",
+        help="Export autonomous HTML document investigation report",
+    ),
+    save_dir: Optional[str] = typer.Option(
+        None,
+        "--save-dir",
+        help="Override default auto-save directory (/tmp/xsearch-results/)",
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Disable automatic JSON payload autosave to disk",
     ),
     format_type: str = typer.Option(
         "table",
@@ -384,7 +479,7 @@ def doc(
         help="Output format: table, json, md",
     ),
 ):
-    """Performs deep document audit: text extraction, SHA256 hashing, OSINT entity scan, and online leak detection."""
+    """Performs deep document audit: text extraction, SHA256 hashing, OSINT entity scan, leak detection, and Wayback snapshots."""
     p = Path(file_path)
     if not p.is_file():
         console.print(f"[bold red]Error:[/bold red] Document file not found: {file_path}")
@@ -394,17 +489,23 @@ def doc(
         surface_searcher=SurfaceSearcher(),
         onion_searcher=OnionSearcher(),
     )
-    console.print(f"[dim]Auditing document '{p.name}' (leak={leak}, similarity={similarity}, onion={onion})...[/dim]")
+    console.print(f"[dim]Auditing document '{p.name}' (leak={leak}, similarity={similarity}, onion={onion}, wayback={wayback})...[/dim]")
     audit_res = asyncio.run(
         auditor.audit(
             file_path=str(p),
             check_leak=leak,
             check_plagiarism=similarity,
             onion_check=onion,
+            check_wayback=wayback,
             limit=limit,
         )
     )
-    output_doc_audit(audit_res, format_type)
+
+    if not no_save:
+        save_path = auto_save_results(audit_res, prefix=f"doc_{p.stem}", custom_dir=save_dir)
+        console.print(f"[dim]Autosaved result to: {save_path}[/dim]")
+
+    output_doc_audit(audit_res, format_type, report_file=report)
 
 
 @app.command()
@@ -455,6 +556,11 @@ def similar(
             timeout=20.0,
             format_type=format_type,
             dedup=True,
+            custom_cookies=None,
+            custom_headers=None,
+            report_file=None,
+            save_dir=None,
+            no_save=True,
         )
     )
 
@@ -512,6 +618,9 @@ async def run_search(
     dedup: bool,
     custom_cookies: Optional[dict] = None,
     custom_headers: Optional[dict] = None,
+    report_file: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    no_save: bool = False,
 ):
     tasks = []
 
@@ -568,7 +677,11 @@ async def run_search(
         must_have_phone=has_phone,
     )
 
-    output_results(all_results, format_type, query=query, show_intel=show_intel)
+    if not no_save:
+        save_path = auto_save_results(all_results, prefix="search", custom_dir=save_dir)
+        console.print(f"[dim]Autosaved result to: {save_path}[/dim]")
+
+    output_results(all_results, format_type, query=query, show_intel=show_intel, report_file=report_file)
 
 
 def main():

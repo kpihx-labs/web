@@ -9,17 +9,17 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 ## 1) Metadata
 
 - `schema_version`: `xsearch.contract.v1`
-- `contract_version`: `1.2.0`
+- `contract_version`: `1.3.0`
 
 ---
 
 ## 2) Conventions
 
-- Multi-network search, crawl, and multimodal media audit: Surface web (SearXNG API), Dark web (Tor .onion live), and Deep/Encrypted darknet (I2P eepsites).
+- Multi-network search, crawl, reverse visual OSINT, and document forensics: Surface web (SearXNG API), Dark web (Tor .onion live), and Deep/Encrypted darknet (I2P eepsites).
 - Deterministic deduplication based on normalized URL (strips URL fragments, query parameters, scheme/www variances).
 - Subcommands: `search`, `fetch`, `crawl`, `image`, `doc`, `similar`, and `engines`.
-- Output channels: stdout format selection via `-f/--format` (`table`, `json`, `csv`, `md`, `text`).
-- Telemetry & error handling: errors in one network, image engine, or document parser must never crash entire workflows (graceful degradation via `asyncio.gather` and exception boundary isolation).
+- Auto-save convention: All command executions automatically serialize their JSON payload with ISO timestamp to `/tmp/xsearch-results/` (mimicking Exa CLI design), with override via `--save-dir` or `--no-save`.
+- Autonomous reporting: Full standalone HTML reports exportable via `--report <path.html>`.
 - Zero censorship & zero hardcoded bounds: arbitrary page limits, recursive depths (`-D/--depth`), custom cookies (`-C/--cookie-file`), custom headers (`-H/--header`), and proxy overrides (`--proxy`).
 
 ---
@@ -41,15 +41,37 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 | `extracted_emails` | `List[str]` | Discovered email addresses via OSINT regex |
 | `extracted_phones` | `List[str]` | Discovered phone numbers via OSINT regex |
 
-### `ImageSearchResult`
+### `ExifMetadata`
 
 | Field | Type | Description |
 |---|---|---|
-| `engine` | `str` | Visual search engine (`yandex`, `google`, `bing`) |
-| `title` | `str` | Page title hosting the matching visual |
-| `url` | `str` | Target URL containing the identical or similar image |
-| `thumbnail_url` | `str` | Engine-generated thumbnail preview URL |
-| `source` | `str` | Source identifier (`reverse_image`) |
+| `camera_make` | `str` | Hardware camera manufacturer (e.g. Apple, Canon) |
+| `camera_model` | `str` | Camera/phone model name |
+| `date_taken` | `str` | Original EXIF capture timestamp |
+| `latitude` | `Optional[float]` | Decimal GPS latitude |
+| `longitude` | `Optional[float]` | Decimal GPS longitude |
+| `altitude` | `Optional[float]` | GPS elevation above sea level in meters |
+| `software` | `str` | Firmware or image editing software |
+| `has_gps` | `bool` | True if valid GPS coordinates were extracted |
+
+### `ImageAuditResult`
+
+| Field | Type | Description |
+|---|---|---|
+| `file_path` | `str` | Absolute path to analyzed image |
+| `file_name` | `str` | Image basename |
+| `sha256` | `str` | Cryptographic SHA256 image checksum |
+| `exif` | `ExifMetadata` | Extracted camera, date, and GPS geolocation |
+| `matches` | `List[ImageSearchResult]` | Discovered web matches across vision engines |
+
+### `WaybackArchiveResult`
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | `str` | Audited web resource URL |
+| `is_archived` | `bool` | True if archived snapshot exists on Wayback Machine |
+| `archive_url` | `str` | Direct link to historical snapshot |
+| `snapshot_timestamp` | `str` | Timestamp of closest historical capture |
 
 ### `DocumentAuditResult`
 
@@ -66,6 +88,7 @@ If implementation, wrappers, or docs conflict with this contract, this contract 
 | `extracted_phones` | `List[str]` | Discovered phone numbers |
 | `hash_leak_matches` | `List[SearchResult]` | Search results matching the exact SHA256 hash |
 | `similarity_leak_matches`| `List[SearchResult]` | Search results matching verbatim sentence fragments |
+| `wayback_archives` | `List[WaybackArchiveResult]`| Historical snapshots for embedded links |
 
 ---
 

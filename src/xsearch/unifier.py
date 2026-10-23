@@ -1,4 +1,4 @@
-"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, crawl, image reverse search, and document audit."""
+"""Core multi-network unifier engine for xsearch with regex, OSINT, EXIF, Wayback Machine, and reporting."""
 
 import asyncio
 import csv
@@ -16,15 +16,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import docx
+import exifread
 import httpx
 import pypdf
 import requests
 from bs4 import BeautifulSoup
 from PicImageSearch import Network, Yandex
+from PIL import Image
 from rich.console import Console
 from rich.table import Table
 
 from .config import CONFIG
+
+# Auto-save directory standard mimicking Exa CLI
+AUTOSAVE_DIR = Path("/tmp/xsearch-results")
 
 # Regex patterns for OSINT entity extraction
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
@@ -67,12 +72,41 @@ class CrawlResult:
 
 
 @dataclass
+class ExifMetadata:
+    camera_make: str = ""
+    camera_model: str = ""
+    date_taken: str = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude: Optional[float] = None
+    software: str = ""
+    has_gps: bool = False
+
+
+@dataclass
 class ImageSearchResult:
     engine: str
     title: str
     url: str
     thumbnail_url: str = ""
     source: str = "reverse_image"
+
+
+@dataclass
+class ImageAuditResult:
+    file_path: str
+    file_name: str
+    sha256: str
+    exif: ExifMetadata
+    matches: List[ImageSearchResult] = field(default_factory=list)
+
+
+@dataclass
+class WaybackArchiveResult:
+    url: str
+    is_archived: bool
+    archive_url: str = ""
+    snapshot_timestamp: str = ""
 
 
 @dataclass
@@ -88,6 +122,91 @@ class DocumentAuditResult:
     extracted_phones: List[str] = field(default_factory=list)
     hash_leak_matches: List[SearchResult] = field(default_factory=list)
     similarity_leak_matches: List[SearchResult] = field(default_factory=list)
+    wayback_archives: List[WaybackArchiveResult] = field(default_factory=list)
+
+
+def auto_save_results(data: Any, prefix: str, custom_dir: Optional[str] = None) -> Path:
+    """Auto-saves any result payload to /tmp/xsearch-results/ with ISO timestamp (Exa style)."""
+    target_dir = Path(custom_dir) if custom_dir else AUTOSAVE_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    clean_prefix = re.sub(r"[^\w\-]", "_", prefix)[:30]
+    filename = f"{clean_prefix}_{timestamp_str}.json"
+    save_path = target_dir / filename
+
+    if hasattr(data, "__dataclass_fields__"):
+        payload = asdict(data)
+    elif isinstance(data, list) and all(hasattr(x, "__dataclass_fields__") for x in data):
+        payload = [asdict(x) for x in data]
+    else:
+        payload = data
+
+    save_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return save_path
+
+
+def _convert_to_degrees(value) -> Optional[float]:
+    """Helper function to convert GPS coordinates stored in EXIF to decimal degrees."""
+    try:
+        d = float(value.values[0].num) / float(value.values[0].den)
+        m = float(value.values[1].num) / float(value.values[1].den)
+        s = float(value.values[2].num) / float(value.values[2].den)
+        return d + (m / 60.0) + (s / 3600.0)
+    except Exception:
+        return None
+
+
+def extract_exif_metadata(image_path: str) -> ExifMetadata:
+    """Extracts camera, timestamp, software, and geographical GPS coordinates from image."""
+    path = Path(image_path)
+    if not path.is_file():
+        return ExifMetadata()
+
+    metadata = ExifMetadata()
+    try:
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f, details=False)
+
+        if "Image Make" in tags:
+            metadata.camera_make = str(tags["Image Make"])
+        if "Image Model" in tags:
+            metadata.camera_model = str(tags["Image Model"])
+        if "Image Software" in tags:
+            metadata.software = str(tags["Image Software"])
+        if "EXIF DateTimeOriginal" in tags:
+            metadata.date_taken = str(tags["EXIF DateTimeOriginal"])
+        elif "Image DateTime" in tags:
+            metadata.date_taken = str(tags["Image DateTime"])
+
+        gps_lat = tags.get("GPS GPSLatitude")
+        gps_lat_ref = tags.get("GPS GPSLatitudeRef")
+        gps_lon = tags.get("GPS GPSLongitude")
+        gps_lon_ref = tags.get("GPS GPSLongitudeRef")
+
+        if gps_lat and gps_lat_ref and gps_lon and gps_lon_ref:
+            lat = _convert_to_degrees(gps_lat)
+            lon = _convert_to_degrees(gps_lon)
+            if lat is not None and lon is not None:
+                if str(gps_lat_ref).strip() != "N":
+                    lat = -lat
+                if str(gps_lon_ref).strip() != "E":
+                    lon = -lon
+                metadata.latitude = round(lat, 6)
+                metadata.longitude = round(lon, 6)
+                metadata.has_gps = True
+
+        gps_alt = tags.get("GPS GPSAltitude")
+        if gps_alt:
+            try:
+                metadata.altitude = round(float(gps_alt.values[0].num) / float(gps_alt.values[0].den), 2)
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+
+    return metadata
 
 
 def extract_osint_entities(text: str) -> Dict[str, List[str]]:
@@ -148,6 +267,28 @@ def parse_custom_headers(headers_list: Optional[List[str]]) -> Dict[str, str]:
             k, v = h.split(":", 1)
             parsed[k.strip()] = v.strip()
     return parsed
+
+
+async def check_wayback_machine(target_url: str) -> WaybackArchiveResult:
+    """Interrogates Wayback Machine API to determine historical archives."""
+    api_url = f"https://archive.org/wayback/available?url={urllib.parse.quote(target_url)}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(api_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                snapshots = data.get("archived_snapshots", {})
+                closest = snapshots.get("closest", {})
+                if closest.get("available", False):
+                    return WaybackArchiveResult(
+                        url=target_url,
+                        is_archived=True,
+                        archive_url=closest.get("url", ""),
+                        snapshot_timestamp=closest.get("timestamp", ""),
+                    )
+    except Exception:
+        pass
+    return WaybackArchiveResult(url=target_url, is_archived=False)
 
 
 class SurfaceSearcher:
@@ -577,7 +718,7 @@ class AsyncCrawler:
 
 
 class ReverseImageSearcher:
-    """Asynchronous reverse image search engine utilizing PicImageSearch (Yandex & Google)."""
+    """Asynchronous reverse image search engine utilizing PicImageSearch and EXIF parsing."""
 
     def __init__(self, proxy: Optional[str] = None):
         self.proxy = proxy
@@ -586,18 +727,28 @@ class ReverseImageSearcher:
         self,
         image_path: str,
         limit: int = 20,
-    ) -> List[ImageSearchResult]:
+    ) -> ImageAuditResult:
         path = Path(image_path)
         if not path.is_file():
-            return []
+            return ImageAuditResult(
+                file_path=image_path,
+                file_name="",
+                sha256="",
+                exif=ExifMetadata(),
+                matches=[],
+            )
 
-        results: List[ImageSearchResult] = []
+        file_bytes = path.read_bytes()
+        sha256 = hashlib.sha256(file_bytes).hexdigest()
+        exif_meta = extract_exif_metadata(image_path)
+
+        matches: List[ImageSearchResult] = []
         try:
             async with Network(proxies=self.proxy) as client:
                 yandex = Yandex(client=client)
                 resp = await yandex.search(file=path)
                 for item in resp.raw[:limit]:
-                    results.append(
+                    matches.append(
                         ImageSearchResult(
                             engine="yandex",
                             title=getattr(item, "title", "No Title") or "No Title",
@@ -609,11 +760,17 @@ class ReverseImageSearcher:
             if CONFIG.debug:
                 print(f"[ReverseImageSearcher:Yandex] Error: {e}", file=sys.stderr)
 
-        return results
+        return ImageAuditResult(
+            file_path=str(path.resolve()),
+            file_name=path.name,
+            sha256=sha256,
+            exif=exif_meta,
+            matches=matches,
+        )
 
 
 class DocumentAuditor:
-    """Audits local files (PDF, DOCX, TXT, MD, CSV) for metadata, SHA256, OSINT entities, and online leaks/plagiarism."""
+    """Audits local files (PDF, DOCX, TXT, MD, CSV) for metadata, SHA256, OSINT entities, online leaks, and Wayback Machine."""
 
     def __init__(self, surface_searcher: SurfaceSearcher, onion_searcher: OnionSearcher):
         self.surface = surface_searcher
@@ -633,12 +790,10 @@ class DocumentAuditor:
         file_type = ext.replace(".", "").upper() or "UNKNOWN"
 
         if ext == ".pdf":
-            # 1. Try pdftotext CLI first (ultra fast C binary)
             proc = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True)
             if proc.returncode == 0 and proc.stdout.strip():
                 extracted_text = proc.stdout.strip()
             else:
-                # Fallback to pypdf
                 try:
                     reader = pypdf.PdfReader(str(path))
                     extracted_text = "\n".join(
@@ -647,7 +802,6 @@ class DocumentAuditor:
                 except Exception:
                     pass
 
-            # If still empty (e.g. scanned PDF), try local tesseract OCR
             if not extracted_text:
                 ocr_proc = subprocess.run(["tesseract", str(path), "stdout"], capture_output=True, text=True)
                 if ocr_proc.returncode == 0:
@@ -661,7 +815,6 @@ class DocumentAuditor:
                 pass
 
         else:
-            # Plain text, Markdown, CSV, source code
             try:
                 extracted_text = path.read_text(encoding="utf-8", errors="ignore").strip()
             except Exception:
@@ -675,6 +828,7 @@ class DocumentAuditor:
         check_leak: bool = True,
         check_plagiarism: bool = True,
         onion_check: bool = False,
+        check_wayback: bool = True,
         limit: int = 5,
     ) -> DocumentAuditResult:
         path = Path(file_path)
@@ -683,9 +837,9 @@ class DocumentAuditor:
 
         hash_matches: List[SearchResult] = []
         similarity_matches: List[SearchResult] = []
+        wayback_results: List[WaybackArchiveResult] = []
 
         if check_leak:
-            # 1. Search for SHA256 checksum leak on Surface and Onion
             tasks = [self.surface.search(query=sha256, limit=limit)]
             if onion_check:
                 tasks.append(self.onion.search(query=sha256, limit=limit))
@@ -695,7 +849,6 @@ class DocumentAuditor:
                     hash_matches.extend(r)
 
         if check_plagiarism and extracted_text:
-            # 2. Extract significant sentence fragments for plagiarism & similarity detection
             lines = [l.strip() for l in extracted_text.splitlines() if len(l.strip()) > 40]
             if lines:
                 sample_quote = lines[0][:80].replace('"', "")
@@ -707,6 +860,17 @@ class DocumentAuditor:
                 for r in results:
                     if isinstance(r, list):
                         similarity_matches.extend(r)
+
+        if check_wayback:
+            # Check if any URL embedded in the document has historical snapshots on Wayback
+            url_pattern = re.compile(r"https?://[^\s\"'>]+")
+            found_urls = list(set(url_pattern.findall(extracted_text)))[:5]
+            if found_urls:
+                wayback_tasks = [check_wayback_machine(u) for u in found_urls]
+                w_res = await asyncio.gather(*wayback_tasks, return_exceptions=True)
+                for item in w_res:
+                    if isinstance(item, WaybackArchiveResult):
+                        wayback_results.append(item)
 
         return DocumentAuditResult(
             file_path=str(path.resolve()),
@@ -720,7 +884,53 @@ class DocumentAuditor:
             extracted_phones=entities["phones"],
             hash_leak_matches=deduplicate(hash_matches),
             similarity_leak_matches=deduplicate(similarity_matches),
+            wayback_archives=wayback_results,
         )
+
+
+def export_html_report(report_path: str, title: str, content_html: str):
+    """Exports an autonomous, clean, dark-themed HTML investigation report."""
+    path = Path(report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>xsearch Investigation Report — {title}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
+    .container {{ max-width: 1000px; margin: 0 auto; background: #1e293b; border-radius: 8px; padding: 2rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }}
+    h1 {{ color: #38bdf8; border-bottom: 2px solid #334155; padding-bottom: 0.5rem; }}
+    h2 {{ color: #94a3b8; margin-top: 2rem; border-bottom: 1px solid #334155; padding-bottom: 0.3rem; }}
+    .badge {{ display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: bold; font-size: 0.8rem; text-transform: uppercase; }}
+    .surface {{ background: #0284c7; color: white; }}
+    .onion {{ background: #ca8a04; color: white; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; }}
+    th, td {{ padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }}
+    th {{ background: #0f172a; color: #cbd5e1; }}
+    a {{ color: #38bdf8; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .meta-box {{ background: #0f172a; padding: 1rem; border-radius: 6px; margin: 1rem 0; font-family: monospace; }}
+    .footer {{ margin-top: 2rem; font-size: 0.8rem; color: #64748b; text-align: center; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔎 xsearch Investigation Report</h1>
+    <div class="meta-box">
+      <strong>Subject:</strong> {title}<br>
+      <strong>Generated:</strong> {timestamp}<br>
+      <strong>Engine:</strong> Sovereign KpihX xsearch Engine
+    </div>
+    {content_html}
+    <div class="footer">Generated by KπX Sovereign Multi-Network Intelligence Engine</div>
+  </div>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
 
 
 def filter_results(
@@ -818,6 +1028,7 @@ def output_results(
     output_format: str,
     query: str = "",
     show_intel: bool = False,
+    report_file: Optional[str] = None,
 ):
     if output_format == "json":
         print(json.dumps([asdict(r) for r in results], indent=2, ensure_ascii=False))
@@ -845,6 +1056,15 @@ def output_results(
             results, title_prefix=f"Query: '{query}'", show_intel=show_intel
         )
 
+    if report_file:
+        html_rows = ""
+        for idx, r in enumerate(results, 1):
+            badge = f'<span class="badge {r.category}">{r.category}</span>'
+            html_rows += f"<tr><td>{idx}</td><td>{badge}</td><td>{r.source}</td><td><strong>{r.title}</strong><br><small>{r.snippet}</small></td><td><a href='{r.url}' target='_blank'>{r.url}</a></td></tr>"
+        content_html = f"<table><thead><tr><th>#</th><th>Tier</th><th>Source</th><th>Title</th><th>URL</th></tr></thead><tbody>{html_rows}</tbody></table>"
+        export_html_report(report_file, f"Query: {query}", content_html)
+        Console().print(f"[bold green]Report exported successfully:[/bold green] {report_file}")
+
 
 def output_fetch_result(result: FetchResult, output_format: str):
     console = Console()
@@ -870,7 +1090,7 @@ def output_fetch_result(result: FetchResult, output_format: str):
         console.print(result.content)
 
 
-def output_crawl_result(result: CrawlResult, output_format: str):
+def output_crawl_result(result: CrawlResult, output_format: str, report_file: Optional[str] = None):
     console = Console()
     if output_format == "json":
         print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
@@ -906,20 +1126,47 @@ def output_crawl_result(result: CrawlResult, output_format: str):
         console.print(f"\n[bold green]Aggregated Emails ({len(result.aggregated_emails)}):[/bold green] {', '.join(result.aggregated_emails) if result.aggregated_emails else 'None'}")
         console.print(f"[bold green]Aggregated Phones ({len(result.aggregated_phones)}):[/bold green] {', '.join(result.aggregated_phones) if result.aggregated_phones else 'None'}\n")
 
+    if report_file:
+        html_rows = ""
+        for idx, p in enumerate(result.pages, 1):
+            html_rows += f"<tr><td>{idx}</td><td>{p.title}</td><td><a href='{p.url}' target='_blank'>{p.url}</a></td><td>{len(p.extracted_emails)} emails, {len(p.extracted_phones)} phones</td></tr>"
+        content_html = f"<h2>Crawl Target: {result.base_url}</h2><p>Pages visited: {result.total_pages_visited}</p><table><thead><tr><th>#</th><th>Title</th><th>URL</th><th>Intel</th></tr></thead><tbody>{html_rows}</tbody></table>"
+        export_html_report(report_file, f"Crawl: {result.base_url}", content_html)
+        console.print(f"[bold green]Report exported successfully:[/bold green] {report_file}")
 
-def output_image_results(results: List[ImageSearchResult], output_format: str, image_path: str):
+
+def output_image_results(audit: ImageAuditResult, output_format: str, report_file: Optional[str] = None):
     console = Console()
     if output_format == "json":
-        print(json.dumps([asdict(r) for r in results], indent=2, ensure_ascii=False))
+        print(json.dumps(asdict(audit), indent=2, ensure_ascii=False))
     elif output_format == "md":
-        print(f"# Reverse Image Search: {Path(image_path).name}\n")
-        for r in results:
+        print(f"# Reverse Image Search: {audit.file_name}\n")
+        print(f"- **SHA256:** `{audit.sha256}`")
+        if audit.exif.camera_make or audit.exif.camera_model:
+            print(f"- **Camera:** {audit.exif.camera_make} {audit.exif.camera_model}")
+        if audit.exif.date_taken:
+            print(f"- **Date Taken:** {audit.exif.date_taken}")
+        if audit.exif.has_gps:
+            print(f"- **GPS Location:** Latitude {audit.exif.latitude}, Longitude {audit.exif.longitude} (Alt: {audit.exif.altitude}m)")
+            print(f"- **OpenStreetMap:** https://www.openstreetmap.org/?mlat={audit.exif.latitude}&mlon={audit.exif.longitude}")
+        print("\n## Reverse Image Matches:\n")
+        for r in audit.matches:
             print(f"- [{r.engine.upper()}] **[{r.title}]({r.url})**")
-            if r.thumbnail_url:
-                print(f"  *Thumbnail:* {r.thumbnail_url}")
     else:
+        # EXIF Meta Display
+        if audit.exif.camera_make or audit.exif.date_taken or audit.exif.has_gps:
+            console.print(f"\n📸 [bold cyan]EXIF Metadata Detected:[/bold cyan] [bold white]{audit.file_name}[/bold white]")
+            if audit.exif.camera_make or audit.exif.camera_model:
+                console.print(f"  • Device: [yellow]{audit.exif.camera_make} {audit.exif.camera_model}[/yellow]")
+            if audit.exif.date_taken:
+                console.print(f"  • Date Taken: [yellow]{audit.exif.date_taken}[/yellow]")
+            if audit.exif.has_gps:
+                console.print(f"  • GPS Coordinates: [bold green]{audit.exif.latitude}, {audit.exif.longitude}[/bold green] (Alt: {audit.exif.altitude}m)")
+                console.print(f"  • Map Link: [blue underline]https://www.openstreetmap.org/?mlat={audit.exif.latitude}&mlon={audit.exif.longitude}[/blue underline]")
+            console.print()
+
         table = Table(
-            title=f"🖼️ [bold cyan]xsearch image[/bold cyan] — {Path(image_path).name} ({len(results)} matches)",
+            title=f"🖼️ [bold cyan]xsearch image[/bold cyan] — {audit.file_name} ({len(audit.matches)} matches)",
             show_header=True,
             header_style="bold magenta",
         )
@@ -928,13 +1175,20 @@ def output_image_results(results: List[ImageSearchResult], output_format: str, i
         table.add_column("Page Title", style="white", ratio=3)
         table.add_column("Matched URL", style="blue underline", ratio=3)
 
-        for idx, r in enumerate(results, 1):
+        for idx, r in enumerate(audit.matches, 1):
             table.add_row(str(idx), r.engine.upper(), r.title[:50], r.url)
 
         console.print(table)
 
+    if report_file:
+        html_rows = "".join(f"<tr><td>{idx}</td><td>{r.engine.upper()}</td><td>{r.title}</td><td><a href='{r.url}' target='_blank'>{r.url}</a></td></tr>" for idx, r in enumerate(audit.matches, 1))
+        exif_html = f"<div class='meta-box'><h3>EXIF Analysis</h3>Device: {audit.exif.camera_make} {audit.exif.camera_model}<br>Date: {audit.exif.date_taken}<br>GPS: {audit.exif.latitude}, {audit.exif.longitude}</div>" if audit.exif.has_gps else ""
+        content_html = f"{exif_html}<table><thead><tr><th>#</th><th>Engine</th><th>Title</th><th>URL</th></tr></thead><tbody>{html_rows}</tbody></table>"
+        export_html_report(report_file, f"Image Search: {audit.file_name}", content_html)
+        console.print(f"[bold green]Report exported successfully:[/bold green] {report_file}")
 
-def output_doc_audit(audit: DocumentAuditResult, output_format: str):
+
+def output_doc_audit(audit: DocumentAuditResult, output_format: str, report_file: Optional[str] = None):
     console = Console()
     if output_format == "json":
         print(json.dumps(asdict(audit), indent=2, ensure_ascii=False))
@@ -950,13 +1204,18 @@ def output_doc_audit(audit: DocumentAuditResult, output_format: str):
             print(f"- [{m.category.upper()}] **[{m.title}]({m.url})** (`{m.source}`)")
         if not audit.hash_leak_matches:
             print("  *None detected.*")
-        print("\n## Content Similarity & Plagiarism Matches:\n")
+        print("\n## Content Similarity & Plagiarism Exposure:\n")
         for m in audit.similarity_leak_matches:
             print(f"- [{m.category.upper()}] **[{m.title}]({m.url})** (`{m.source}`)")
             if m.snippet:
                 print(f"  > {m.snippet[:180]}...")
         if not audit.similarity_leak_matches:
             print("  *None detected.*")
+        if audit.wayback_archives:
+            print("\n## Historical Wayback Machine Archives:\n")
+            for w in audit.wayback_archives:
+                status = f"[Archived on {w.snapshot_timestamp}]({w.archive_url})" if w.is_archived else "Not archived"
+                print(f"- **{w.url}**: {status}")
     else:
         console.print(f"\n📄 [bold cyan]Document Audit Report:[/bold cyan] [bold white]{audit.file_name}[/bold white]")
         console.print(f"  • Format: [yellow]{audit.file_type}[/yellow] | Size: [dim]{audit.file_size_bytes} bytes[/dim] | Chars: {audit.char_count}")
@@ -992,4 +1251,33 @@ def output_doc_audit(audit: DocumentAuditResult, output_format: str):
         if not audit.similarity_leak_matches:
             s_table.add_row("-", "CLEAR", "No verbatim paragraph/sentence matches found", "-")
         console.print(s_table)
+
+        # Table for Wayback
+        if audit.wayback_archives:
+            w_table = Table(title="🕰️ Historical Wayback Machine Archives", show_header=True, header_style="bold cyan")
+            w_table.add_column("Referenced URL", style="white", ratio=2)
+            w_table.add_column("Archived?", style="bold", width=12)
+            w_table.add_column("Snapshot URL", style="blue underline", ratio=3)
+            for w in audit.wayback_archives:
+                status_str = "[green]✓ YES[/green]" if w.is_archived else "[dim]✗ NO[/dim]"
+                w_table.add_row(w.url, status_str, w.archive_url or "-")
+            console.print(w_table)
         console.print()
+
+    if report_file:
+        html_hash = "".join(f"<tr><td>{idx}</td><td>{m.title}</td><td><a href='{m.url}'>{m.url}</a></td></tr>" for idx, m in enumerate(audit.hash_leak_matches, 1)) or "<tr><td colspan='3'>No hash leaks detected</td></tr>"
+        html_sim = "".join(f"<tr><td>{idx}</td><td>{m.title}</td><td><a href='{m.url}'>{m.url}</a></td></tr>" for idx, m in enumerate(audit.similarity_leak_matches, 1)) or "<tr><td colspan='3'>No similarity matches detected</td></tr>"
+        content_html = f"""
+        <div class="meta-box">
+          <strong>SHA256:</strong> {audit.sha256}<br>
+          <strong>Format:</strong> {audit.file_type} ({audit.file_size_bytes} bytes)<br>
+          <strong>Emails:</strong> {', '.join(audit.extracted_emails) or 'None'}<br>
+          <strong>Phones:</strong> {', '.join(audit.extracted_phones) or 'None'}
+        </div>
+        <h2>1. SHA256 Checksum Leaks</h2>
+        <table><thead><tr><th>#</th><th>Title</th><th>URL</th></tr></thead><tbody>{html_hash}</tbody></table>
+        <h2>2. Content Similarity & Plagiarism Exposure</h2>
+        <table><thead><tr><th>#</th><th>Title</th><th>URL</th></tr></thead><tbody>{html_sim}</tbody></table>
+        """
+        export_html_report(report_file, f"Document Audit: {audit.file_name}", content_html)
+        console.print(f"[bold green]Report exported successfully:[/bold green] {report_file}")
