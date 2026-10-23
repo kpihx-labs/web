@@ -1,0 +1,28 @@
+[project]
+name = "search-unifier"
+version = "0.1.0"
+description = "Unified search across Surface Web + Tor .onion + I2P .i2p"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "requests[socks]>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pyright", "pytest"]
+
+[project.scripts]
+search-unifier = "search_unifier.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
