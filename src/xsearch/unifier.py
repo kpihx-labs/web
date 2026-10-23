@@ -1,8 +1,9 @@
-"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, and similar."""
+"""Core multi-network unifier engine for xsearch with regex, OSINT, fetch, crawl, and session bridging."""
 
 import asyncio
 import csv
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,7 +11,8 @@ import sys
 import urllib.parse
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 import requests
@@ -51,6 +53,15 @@ class FetchResult:
     extracted_phones: List[str] = field(default_factory=list)
 
 
+@dataclass
+class CrawlResult:
+    base_url: str
+    total_pages_visited: int
+    pages: List[FetchResult]
+    aggregated_emails: List[str] = field(default_factory=list)
+    aggregated_phones: List[str] = field(default_factory=list)
+
+
 def extract_osint_entities(text: str) -> Dict[str, List[str]]:
     """Extracts email addresses and phone numbers from arbitrary text."""
     emails = list(set(EMAIL_REGEX.findall(text)))
@@ -62,7 +73,55 @@ def extract_osint_entities(text: str) -> Dict[str, List[str]]:
             if 8 <= len(re.sub(r"\D", "", p)) <= 15
         )
     )
-    return {"emails": emails, "phones": phones}
+    return {"emails": sorted(emails), "phones": sorted(phones)}
+
+
+def parse_cookie_file(cookie_file_path: str) -> Dict[str, str]:
+    """Parses Netscape standard cookies.txt or JSON cookie files."""
+    cookies: Dict[str, str] = {}
+    path = Path(cookie_file_path)
+    if not path.is_file():
+        return cookies
+
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    # Try parsing as JSON first
+    try:
+        data = json.loads(content)
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "name" in item and "value" in item:
+                    cookies[item["name"]] = item["value"]
+        elif isinstance(data, dict):
+            for k, v in data.items():
+                cookies[str(k)] = str(v)
+        return cookies
+    except Exception:
+        pass
+
+    # Parse as standard Netscape format
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            cookies[parts[5]] = parts[6]
+        elif len(parts) == 2:
+            cookies[parts[0]] = parts[1]
+
+    return cookies
+
+
+def parse_custom_headers(headers_list: Optional[List[str]]) -> Dict[str, str]:
+    """Parses list of header strings in 'Key: Value' format."""
+    parsed: Dict[str, str] = {}
+    if not headers_list:
+        return parsed
+    for h in headers_list:
+        if ":" in h:
+            k, v = h.split(":", 1)
+            parsed[k.strip()] = v.strip()
+    return parsed
 
 
 class SurfaceSearcher:
@@ -93,6 +152,7 @@ class SurfaceSearcher:
         time_range: Optional[str] = None,
         limit: int = 20,
         timeout: float = CONFIG.default_timeout_s,
+        custom_headers: Optional[Dict[str, str]] = None,
     ) -> List[SearchResult]:
         params: Dict[str, Any] = {
             "q": query,
@@ -108,9 +168,10 @@ class SurfaceSearcher:
         if time_range:
             params["time_range"] = time_range
 
+        headers = custom_headers or {}
         results: List[SearchResult] = []
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
                 resp = await client.get(f"{self.base_url}/search", params=params)
                 resp.raise_for_status()
                 data = resp.json()
@@ -156,7 +217,12 @@ class OnionSearcher:
         }
 
     def _search_tor66_direct(
-        self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
+        self,
+        query: str,
+        limit: int = 20,
+        timeout: float = CONFIG.default_timeout_s,
+        custom_headers: Optional[Dict[str, str]] = None,
+        custom_cookies: Optional[Dict[str, str]] = None,
     ) -> List[SearchResult]:
         results: List[SearchResult] = []
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy}
@@ -165,11 +231,14 @@ class OnionSearcher:
             f"?q={urllib.parse.quote(query)}&sorttype=rel&page=1"
         )
 
+        headers = {**self.headers, **(custom_headers or {})}
+
         try:
             r = requests.get(
                 url,
                 proxies=proxies,
-                headers=self.headers,
+                headers=headers,
+                cookies=custom_cookies,
                 timeout=timeout,
             )
             if r.status_code == 200:
@@ -207,7 +276,10 @@ class OnionSearcher:
         return results
 
     def _search_with_wrapper(
-        self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
+        self,
+        query: str,
+        limit: int = 20,
+        timeout: float = CONFIG.default_timeout_s,
     ) -> List[SearchResult]:
         wrapper = shutil.which(self.transport)
         if not wrapper:
@@ -259,14 +331,24 @@ class OnionSearcher:
         return results
 
     async def search(
-        self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
+        self,
+        query: str,
+        limit: int = 20,
+        timeout: float = CONFIG.default_timeout_s,
+        custom_headers: Optional[Dict[str, str]] = None,
+        custom_cookies: Optional[Dict[str, str]] = None,
     ) -> List[SearchResult]:
         if self.transport in ["oniux", "torsocks"]:
             return await asyncio.to_thread(
                 self._search_with_wrapper, query, limit, timeout
             )
         return await asyncio.to_thread(
-            self._search_tor66_direct, query, limit, timeout
+            self._search_tor66_direct,
+            query,
+            limit,
+            timeout,
+            custom_headers,
+            custom_cookies,
         )
 
 
@@ -283,33 +365,42 @@ class I2PSearcher:
 
 
 class ContentFetcher:
-    """Fetches clean text and OSINT entities from arbitrary Clearnet or .onion URLs."""
+    """Fetches clean text and OSINT entities from arbitrary Clearnet or .onion URLs with cookie/header support."""
 
     def __init__(
         self,
         tor_proxy: str = CONFIG.tor_proxy,
         timeout: float = CONFIG.default_timeout_s,
+        proxy_override: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         self.tor_proxy = tor_proxy
         self.timeout = timeout
+        self.proxy_override = proxy_override
+        self.cookies = cookies or {}
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0",
+            **(headers or {}),
         }
 
     def _fetch_sync(self, url: str) -> FetchResult:
         is_onion = ".onion" in url.lower()
         category = "onion" if is_onion else "surface"
-        proxies = (
-            {"http": self.tor_proxy, "https": self.tor_proxy}
-            if is_onion
-            else None
-        )
+
+        if self.proxy_override:
+            proxies = {"http": self.proxy_override, "https": self.proxy_override}
+        elif is_onion:
+            proxies = {"http": self.tor_proxy, "https": self.tor_proxy}
+        else:
+            proxies = None
 
         try:
             r = requests.get(
                 url,
                 proxies=proxies,
                 headers=self.headers,
+                cookies=self.cookies,
                 timeout=self.timeout,
             )
             status_code = r.status_code
@@ -348,6 +439,122 @@ class ContentFetcher:
 
     async def fetch(self, url: str) -> FetchResult:
         return await asyncio.to_thread(self._fetch_sync, url)
+
+
+class AsyncCrawler:
+    """Sovereign recursive web crawler supporting Surface and Tor with OSINT extraction and local asset saving."""
+
+    def __init__(
+        self,
+        base_url: str,
+        max_depth: int = 1,
+        max_pages: int = 20,
+        stay_domain: bool = True,
+        tor_proxy: str = CONFIG.tor_proxy,
+        timeout: float = CONFIG.default_timeout_s,
+        proxy_override: Optional[str] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        download_dir: Optional[str] = None,
+    ):
+        self.base_url = base_url
+        self.max_depth = max_depth
+        self.max_pages = max_pages
+        self.stay_domain = stay_domain
+        self.fetcher = ContentFetcher(
+            tor_proxy=tor_proxy,
+            timeout=timeout,
+            proxy_override=proxy_override,
+            cookies=cookies,
+            headers=headers,
+        )
+        self.download_dir = Path(download_dir) if download_dir else None
+
+        parsed = urllib.parse.urlparse(base_url)
+        self.target_domain = parsed.netloc
+
+    async def crawl(self) -> CrawlResult:
+        visited: Set[str] = set()
+        queue: List[tuple[str, int]] = [(self.base_url, 0)]
+        pages: List[FetchResult] = []
+        all_emails: Set[str] = set()
+        all_phones: Set[str] = set()
+
+        if self.download_dir:
+            self.download_dir.mkdir(parents=True, exist_ok=True)
+
+        while queue and len(visited) < self.max_pages:
+            current_url, depth = queue.pop(0)
+            norm_url = current_url.split("#")[0].rstrip("/")
+
+            if norm_url in visited:
+                continue
+            visited.add(norm_url)
+
+            # Fetch page content
+            res = await self.fetcher.fetch(current_url)
+            if res.status_code == 200:
+                pages.append(res)
+                all_emails.update(res.extracted_emails)
+                all_phones.update(res.extracted_phones)
+
+                # Save locally if requested
+                if self.download_dir:
+                    safe_filename = re.sub(r"[^\w\-.]", "_", current_url)[:120] + ".txt"
+                    save_path = self.download_dir / safe_filename
+                    save_path.write_text(
+                        f"URL: {current_url}\nTITLE: {res.title}\n\n{res.content}",
+                        encoding="utf-8",
+                    )
+
+                # Discover new links if within depth
+                if depth < self.max_depth:
+                    new_links = self._extract_links(current_url, res.content)
+                    for link in new_links:
+                        norm_link = link.split("#")[0].rstrip("/")
+                        if norm_link not in visited:
+                            queue.append((link, depth + 1))
+
+        return CrawlResult(
+            base_url=self.base_url,
+            total_pages_visited=len(pages),
+            pages=pages,
+            aggregated_emails=sorted(all_emails),
+            aggregated_phones=sorted(all_phones),
+        )
+
+    def _extract_links(self, page_url: str, text_content: str) -> List[str]:
+        """Extracts and resolves absolute links on the same host if required."""
+        # Fast HTML re-fetch parse for <a> hrefs
+        links: List[str] = []
+        # Re-parse raw soup links from fetcher
+        try:
+            is_onion = ".onion" in page_url.lower()
+            proxies = (
+                {"http": self.fetcher.tor_proxy, "https": self.fetcher.tor_proxy}
+                if is_onion
+                else None
+            )
+            r = requests.get(
+                page_url,
+                proxies=proxies,
+                headers=self.fetcher.headers,
+                cookies=self.fetcher.cookies,
+                timeout=10.0,
+            )
+            soup = BeautifulSoup(r.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                abs_url = urllib.parse.urljoin(page_url, a["href"])
+                parsed_link = urllib.parse.urlparse(abs_url)
+                if parsed_link.scheme in ["http", "https"]:
+                    if self.stay_domain:
+                        if parsed_link.netloc == self.target_domain:
+                            links.append(abs_url)
+                    else:
+                        links.append(abs_url)
+        except Exception:
+            pass
+        return links
 
 
 def filter_results(
@@ -500,3 +707,41 @@ def output_fetch_result(result: FetchResult, output_format: str):
             console.print(f"[bold yellow]Phones:[/bold yellow] {', '.join(result.extracted_phones)}")
         console.print("\n[dim]─── Content Preview ───[/dim]\n")
         console.print(result.content)
+
+
+def output_crawl_result(result: CrawlResult, output_format: str):
+    """Outputs crawl results in JSON, Markdown, or Rich Table."""
+    console = Console()
+    if output_format == "json":
+        print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
+    elif output_format == "md":
+        print(f"# Crawl Summary: {result.base_url}\n")
+        print(f"- **Pages visited:** {result.total_pages_visited}")
+        print(f"- **Aggregated Emails:** {', '.join(result.aggregated_emails) if result.aggregated_emails else 'None'}")
+        print(f"- **Aggregated Phones:** {', '.join(result.aggregated_phones) if result.aggregated_phones else 'None'}\n")
+        print("## Pages Crawled:\n")
+        for p in result.pages:
+            print(f"- **[{p.title}]({p.url})** ({p.text_length} chars, Status: {p.status_code})")
+    else:
+        table = Table(
+            title=f"🕷️ [bold cyan]xsearch crawl[/bold cyan] — {result.base_url} ({result.total_pages_visited} pages)",
+            show_header=True,
+            header_style="bold magenta",
+        )
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Title", style="white", ratio=2)
+        table.add_column("URL", style="blue underline", ratio=3)
+        table.add_column("Intel Found", style="yellow", ratio=2)
+
+        for idx, p in enumerate(result.pages, 1):
+            intel_parts = []
+            if p.extracted_emails:
+                intel_parts.append(f"✉️ {len(p.extracted_emails)} email(s)")
+            if p.extracted_phones:
+                intel_parts.append(f"📞 {len(p.extracted_phones)} phone(s)")
+            intel_str = " | ".join(intel_parts) if intel_parts else "[dim]-[/dim]"
+            table.add_row(str(idx), p.title[:40], p.url, intel_str)
+
+        console.print(table)
+        console.print(f"\n[bold green]Aggregated Emails ({len(result.aggregated_emails)}):[/bold green] {', '.join(result.aggregated_emails) if result.aggregated_emails else 'None'}")
+        console.print(f"[bold green]Aggregated Phones ({len(result.aggregated_phones)}):[/bold green] {', '.join(result.aggregated_phones) if result.aggregated_phones else 'None'}\n")

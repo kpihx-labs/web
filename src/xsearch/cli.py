@@ -1,27 +1,31 @@
-"""CLI entrypoint using Typer and Rich with subcommands (search, fetch, similar)."""
+"""CLI entrypoint using Typer and Rich with subcommands (search, fetch, similar, crawl, engines)."""
 
 import asyncio
 import urllib.parse
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from .unifier import (
+    AsyncCrawler,
     ContentFetcher,
     I2PSearcher,
     OnionSearcher,
     SurfaceSearcher,
     deduplicate,
     filter_results,
+    output_crawl_result,
     output_fetch_result,
     output_results,
+    parse_cookie_file,
+    parse_custom_headers,
 )
 
 app = typer.Typer(
     name="xsearch",
-    help="⚡ Sovereign ultra-flexible multi-network search CLI (Surface, Tor .onion, I2P).",
+    help="⚡ Sovereign ultra-flexible multi-network search & crawl CLI (Surface, Tor .onion, I2P).",
     add_completion=False,
 )
 console = Console()
@@ -121,7 +125,7 @@ def search(
         "--time-range",
         help="Time filter: day, week, month, year",
     ),
-    # Transport & Isolation
+    # Transport & Isolation & Bridge
     transport: str = typer.Option(
         "direct",
         "--transport",
@@ -131,6 +135,18 @@ def search(
         30.0,
         "--timeout",
         help="Network timeout in seconds",
+    ),
+    cookie_file: Optional[str] = typer.Option(
+        None,
+        "-C",
+        "--cookie-file",
+        help="Path to cookies file (JSON or Netscape format from browser-proxy)",
+    ),
+    header: Optional[List[str]] = typer.Option(
+        None,
+        "-H",
+        "--header",
+        help="Custom header in 'Key: Value' format (can be specified multiple times)",
     ),
     # Output formatting
     format_type: str = typer.Option(
@@ -146,6 +162,9 @@ def search(
     ),
 ):
     """Executes multi-network search queries across Surface, Tor, and I2P."""
+    cookies_map = parse_cookie_file(cookie_file) if cookie_file else None
+    headers_map = parse_custom_headers(header)
+
     asyncio.run(
         run_search(
             query=query,
@@ -168,6 +187,8 @@ def search(
             timeout=timeout,
             format_type=format_type,
             dedup=dedup,
+            custom_cookies=cookies_map,
+            custom_headers=headers_map,
         )
     )
 
@@ -186,11 +207,111 @@ def fetch(
         "--timeout",
         help="Network timeout in seconds",
     ),
+    cookie_file: Optional[str] = typer.Option(
+        None,
+        "-C",
+        "--cookie-file",
+        help="Path to cookies file (JSON or Netscape format from browser-proxy)",
+    ),
+    header: Optional[List[str]] = typer.Option(
+        None,
+        "-H",
+        "--header",
+        help="Custom header in 'Key: Value' format (repeatable)",
+    ),
+    proxy: Optional[str] = typer.Option(
+        None,
+        "--proxy",
+        help="Override proxy URL (e.g. http://127.0.0.1:8080 or socks5h://...)",
+    ),
 ):
     """Fetches clean text and extracts OSINT intelligence (emails/phones) from any URL or .onion."""
-    fetcher = ContentFetcher(timeout=timeout)
+    cookies_map = parse_cookie_file(cookie_file) if cookie_file else None
+    headers_map = parse_custom_headers(header)
+
+    fetcher = ContentFetcher(
+        timeout=timeout,
+        proxy_override=proxy,
+        cookies=cookies_map,
+        headers=headers_map,
+    )
     result = asyncio.run(fetcher.fetch(url))
     output_fetch_result(result, format_type)
+
+
+@app.command()
+def crawl(
+    url: str = typer.Argument(..., help="Base URL or hidden service (.onion) to crawl recursively"),
+    depth: int = typer.Option(
+        1,
+        "-D",
+        "--depth",
+        help="Max recursive crawling depth (0 = single page, 1 = direct links, 2 = nested)",
+    ),
+    max_pages: int = typer.Option(
+        20,
+        "-n",
+        "--max-pages",
+        help="Maximum pages to visit and process",
+    ),
+    stay_domain: bool = typer.Option(
+        True,
+        "--stay-domain/--cross-domain",
+        help="Stay strictly on the same root hostname (default: stay on domain)",
+    ),
+    download_dir: Optional[str] = typer.Option(
+        None,
+        "--download-dir",
+        help="Local directory path to save clean page dumps and assets",
+    ),
+    cookie_file: Optional[str] = typer.Option(
+        None,
+        "-C",
+        "--cookie-file",
+        help="Path to cookies file from browser-proxy",
+    ),
+    header: Optional[List[str]] = typer.Option(
+        None,
+        "-H",
+        "--header",
+        help="Custom header in 'Key: Value' format (repeatable)",
+    ),
+    proxy: Optional[str] = typer.Option(
+        None,
+        "--proxy",
+        help="Override proxy URL",
+    ),
+    timeout: float = typer.Option(
+        20.0,
+        "--timeout",
+        help="Per-page request timeout in seconds",
+    ),
+    format_type: str = typer.Option(
+        "table",
+        "-f",
+        "--format",
+        help="Output format: table, json, md",
+    ),
+):
+    """Recursively crawls websites or hidden services with link queueing, OSINT scraping, and optional downloads."""
+    cookies_map = parse_cookie_file(cookie_file) if cookie_file else None
+    headers_map = parse_custom_headers(header)
+
+    crawler = AsyncCrawler(
+        base_url=url,
+        max_depth=depth,
+        max_pages=max_pages,
+        stay_domain=stay_domain,
+        timeout=timeout,
+        proxy_override=proxy,
+        cookies=cookies_map,
+        headers=headers_map,
+        download_dir=download_dir,
+    )
+
+    console.print(f"[dim]Initiating recursive crawl on '{url}' (depth={depth}, max_pages={max_pages})...[/dim]")
+    result = asyncio.run(crawler.crawl())
+    output_crawl_result(result, format_type)
 
 
 @app.command()
@@ -296,6 +417,8 @@ async def run_search(
     timeout: float,
     format_type: str,
     dedup: bool,
+    custom_cookies: Optional[dict] = None,
+    custom_headers: Optional[dict] = None,
 ):
     tasks = []
 
@@ -312,12 +435,21 @@ async def run_search(
                 time_range=time_range,
                 limit=limit,
                 timeout=timeout,
+                custom_headers=custom_headers,
             )
         )
 
     if onion:
         o_searcher = OnionSearcher(transport=transport)
-        tasks.append(o_searcher.search(query=query, limit=limit, timeout=timeout))
+        tasks.append(
+            o_searcher.search(
+                query=query,
+                limit=limit,
+                timeout=timeout,
+                custom_headers=custom_headers,
+                custom_cookies=custom_cookies,
+            )
+        )
 
     if i2p:
         i_searcher = I2PSearcher()
