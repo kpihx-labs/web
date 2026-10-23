@@ -1,6 +1,7 @@
-"""Centralized immutable configuration for search-unifier (KπX standard)."""
+"""Centralized immutable configuration for xsearch (KπX sovereign standard)."""
 
 from dataclasses import dataclass
+
 
 @dataclass(frozen=True)
 class Config:
@@ -9,5 +10,6 @@ class Config:
     i2p_proxy: str = "http://127.0.0.1:4444"
     default_timeout_s: float = 30.0
     debug: bool = False
+
 
 CONFIG = Config()

@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := help
 SHELL         := /bin/zsh
 
-PKG_NAME     := search-unifier
-PKG_DIR_NAME := search_unifier
+PKG_NAME     := xsearch
+PKG_DIR_NAME := xsearch
 PKG_DIR      := src/$(PKG_DIR_NAME)
 VERSION      := $(shell grep -m 1 version pyproject.toml | tr -s ' ' | tr -d '"' | tr -d "'" | cut -d= -f2 | xargs)
 
@@ -11,7 +11,7 @@ PYTHON := $(UV) run python
 
 PY_FILES := $(shell $(UV) run python -c 'from pathlib import Path; print(" ".join(map(str, Path("$(PKG_DIR)").rglob("*.py"))))')
 
-.PHONY: help check smoke uv-link uv-unlink status log run-surface run-onion run-all
+.PHONY: help check smoke uv-link uv-unlink status log test-table test-json test-onion
 
 help:  ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
@@ -29,20 +29,20 @@ smoke:  ## Smoke test verifying module imports
 
 # ── Execution ────────────────────────────────────────────────────────────────
 
-run-surface:  ## Run test query on surface web
-	@$(UV) run search-unifier "privacy tools" --surface -f md --limit 3
+test-table:  ## Run test query with Rich table output
+	@$(UV) run xsearch "privacy tools" -s -f table -n 3
 
-run-onion:  ## Run test query on dark web (.onion)
-	@$(UV) run search-unifier "security" --no-surface --onion -f md --limit 3
+test-json:  ## Run test query with JSON output
+	@$(UV) run xsearch "cryptography" -s -f json -n 2
 
-run-all:  ## Run test query across surface and dark web simultaneously
-	@$(UV) run search-unifier "privacy" --surface --onion -f md --limit 3
+test-onion:  ## Run test query on dark web (.onion)
+	@$(UV) run xsearch "bitcoin" --no-surface -o -f table -n 3
 
 # ── Install / Dev link (uv tool) ─────────────────────────────────────────────
 
 uv-link:  ## Link globally into PATH via uv tool
 	@$(UV) tool install --editable . --force
-	@echo "✅ $(PKG_NAME) linked globally in ~/.local/bin/search-unifier"
+	@echo "✅ $(PKG_NAME) linked globally in ~/.local/bin/xsearch"
 
 uv-unlink:  ## Uninstall global uv tool
 	@$(UV) tool uninstall $(PKG_NAME) 2>/dev/null || true
