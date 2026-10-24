@@ -45,6 +45,12 @@ def render(record):
             f"web {record['action']}: {record['status']} | {record['timestamp']}"
         )
     )
+    if data.get("cache"):
+        console.print(
+            terminal_text(
+                f"Retrieval: {data['cache']['state']}; snapshot age {data['cache']['age_seconds']}s; live request: {data['cache']['live_request']}"
+            )
+        )
     rows = data.get("results", data.get("pages", data.get("engines")))
     if record["action"] == "image":
         console.print(JSON.from_data(data.get("metadata", {})))
@@ -64,9 +70,14 @@ def render(record):
         for heading in (
             ("Engine", "Categories", "Default enabled")
             if catalog
-            else ("#", "Title / state", "URL", "Source")
+            else ("#", "Title / state", "URL", "Sources")
         ):
-            table.add_column(heading)
+            table.add_column(
+                heading,
+                overflow="fold",
+                no_wrap=False,
+                ratio=3 if heading == "URL" else 2 if heading == "Title / state" else 1,
+            )
         for index, row in enumerate(rows, 1):
             if catalog:
                 enabled = row.get(
@@ -82,15 +93,41 @@ def render(record):
                     index,
                     str(row.get("title", row.get("access_state", "")))[:160],
                     row.get("url", ""),
-                    row.get("engine", row.get("network", "")),
+                    ", ".join(
+                        row.get("sources")
+                        or row.get("engines")
+                        or [row.get("engine", row.get("network", ""))]
+                    ),
                 )
             table.add_row(*(terminal_text(cell) for cell in cells))
         console.print(table)
         console.print(
             terminal_text(
-                f"Returned {len(rows)}; limit={data.get('limit', 'n/a')}; page budget={data.get('page_budget', 'n/a')}. Coverage is not exhaustive."
+                f"Collected {len(rows)}/{data.get('limit', 'all')} requested; unique candidates={data.get('unique_candidates', len(rows))}; page requests={len(data.get('page_requests', data.get('attempted_pages', [])))}/{data.get('page_budget', 'n/a')}; stop={data.get('stop_reason', 'n/a')}. Coverage is not exhaustive."
             )
         )
+        if data.get("engine_coverage"):
+            coverage = Table(
+                title="Engine coverage in this snapshot (no-results is not a health probe)"
+            )
+            for heading in ("Engine", "Contributed URLs", "State", "Issues"):
+                coverage.add_column(heading, overflow="fold")
+            for item in data["engine_coverage"]:
+                coverage.add_row(
+                    *(
+                        terminal_text(v)
+                        for v in (
+                            item["engine"],
+                            item["contributed_urls"],
+                            item["state"],
+                            "; ".join(item["issues"]),
+                        )
+                    )
+                )
+            console.print(coverage)
+            console.print(
+                "Contribution counts are unique backend candidates before local filters/output limit; default selection is inferred from the catalogue."
+            )
         for name in ("upstream_issues", "backend_failures", "errors"):
             if data.get(name):
                 console.print(

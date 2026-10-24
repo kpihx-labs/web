@@ -21,7 +21,7 @@ from .documents import compare, extract
 from .http import Session, WebError, save_bytes
 from .images import inspect
 from .maps import Maps, json_input, json_object, json_vertices
-from .output import emit
+from .output import emit, render
 from .research import crawl as crawl_site
 from .research import search as search_web
 from .user_config import config_dir, initialize, results_dir, settings
@@ -98,9 +98,23 @@ def search(
         "-z",
         help="Comma-separated configured backends; surface/onion, or custom search_backends names",
     ),
-    rank: str = typer.Option("provider", "--rank", "-k"),
-    pages: int = typer.Option(1, "--pages", "-P"),
-    page: int = typer.Option(1, "--page", "-p"),
+    rank: str = typer.Option(
+        "relevance",
+        "--rank",
+        "-k",
+        help="relevance: term coverage then provider score; provider: score only; lexical: term coverage only",
+    ),
+    pages: int | None = typer.Option(
+        None,
+        "--max-pages",
+        "-p",
+        "--pages",
+        "-P",
+        help="Maximum page requests for target collection; default search_max_pages=3. -p and -P are aliases",
+    ),
+    page: int = typer.Option(
+        1, "--start-page", "-s", help="Advanced starting page, not a page count"
+    ),
     limit: int = typer.Option(20, "--limit", "-n"),
     site: str | None = typer.Option(None, "--site", "-d"),
     regex: str | None = typer.Option(None, "--regex", "-r"),
@@ -118,8 +132,14 @@ def search(
     save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
     no_save: bool = typer.Option(False, "--no-save", "-N"),
     report: Path | None = typer.Option(None, "--report", "-R"),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        "-F",
+        help="Force a live request, with no cached/stale fallback; respect provider limits",
+    ),
 ):
-    """Search explicit index pages. -n is not depth; -P controls the page budget."""
+    """Collect up to -n unique results, stopping at target, source exhaustion or page budget."""
     execute(
         "search",
         lambda: asyncio.run(
@@ -137,6 +157,8 @@ def search(
                 language=language,
                 safe=safe,
                 timeout=timeout,
+                fresh=fresh,
+                persist=not no_save,
                 params=json_object(params),
             )
         ),
@@ -318,6 +340,7 @@ def doc(
                     search_web(
                         '"' + query + '"' if query_mode == "exact" else query,
                         limit=limit,
+                        persist=not no_save,
                     )
                 )
                 for row in found["results"]:
@@ -380,10 +403,24 @@ def image(
                 local = Path(folder) / "image.bin"
                 local.write_bytes(body)
                 return asyncio.run(
-                    inspect(local, online, engines.split(","), limit, text_search)
+                    inspect(
+                        local,
+                        online,
+                        engines.split(","),
+                        limit,
+                        text_search,
+                        persist=not no_save,
+                    )
                 )
         return asyncio.run(
-            inspect(path, online, engines.split(","), limit, text_search)
+            inspect(
+                path,
+                online,
+                engines.split(","),
+                limit,
+                text_search,
+                persist=not no_save,
+            )
         )
 
     execute(
@@ -591,6 +628,30 @@ def map_request(
 
 def main():
     app()
+
+
+@app.command()
+def show(path: Path, fmt: str = typer.Option("table", "--format", "-f")):
+    """Render the SAME saved snapshot as table or JSON, with no network requests."""
+    try:
+        record = json.loads(path.read_text())
+        if (
+            not isinstance(record, dict)
+            or not {"action", "timestamp", "data", "status"} <= record.keys()
+        ):
+            raise ValueError("Expected a web result envelope, not a cookie/header file")
+        typer.echo(
+            f"Saved snapshot from {record['timestamp']}; no network request.", err=True
+        )
+        if fmt == "table":
+            render(record)
+        elif fmt == "json":
+            print(json.dumps(record, ensure_ascii=False, indent=2))
+        else:
+            raise ValueError("show supports table or json")
+    except (ValueError, OSError) as error:
+        typer.echo(f"ERROR: {error}", err=True)
+        raise typer.Exit(2) from None
 
 
 @app.command()

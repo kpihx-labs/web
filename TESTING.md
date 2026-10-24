@@ -5,7 +5,21 @@ source-discussion review and the defects behind the design changes.
 
 ## Offline gates
 
-`make check`: Ruff lint/format, Pyright, and 40 regressions on this workstation.
+### 2.1 search correction verification (2026-10-25)
+
+- Original failing live case `web search "KAMDEM Ivann" -n 30 -p 5` collected
+  30 unique candidates in three page requests. Default providers were limited;
+  explicit fallback used Yahoo/Yep/MWMBL, with coverage still labelled partial.
+- Default `web search "KAMDEM Ivann"` collected 20/20 in two page requests.
+  Three immediately repeated JSON commands reused the exact same candidate
+  snapshot (live_request=false, no new provider calls).
+- Table replay used that snapshot and folded complete URLs. Unit verification
+  reconstructs a long URL from table cells and compares it byte-for-byte.
+- Tests cover table/JSON snapshot identity, all duplicate contributors, numeric
+  score/relevance ranking, early target stop, explicit shortfall, bounded fallback,
+  explicit engine preservation, stale-on-error labels and lowercase -p semantics.
+
+`make check`: Ruff lint/format, Pyright, and 48 regressions on this workstation.
 Coverage includes HTTP 200 auth walls, binary hashes, scoped cookies/custom headers,
 redirects across hosts/ports, Tor proxy preservation/no local DNS, I2P HTTP proxy
 protocol, robots, next links, one fetch per page, URL case/query semantics,

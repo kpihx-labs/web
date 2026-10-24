@@ -13,7 +13,9 @@ from .http import WebError
 from .user_config import settings
 
 
-async def inspect(path, online=False, engines=("yandex",), limit=10, text_search=False):
+async def inspect(
+    path, online=False, engines=("yandex",), limit=10, text_search=False, persist=True
+):
     if limit < 0:
         raise WebError(
             "Image limit must be nonnegative; zero selects all fetched candidates"
@@ -99,7 +101,7 @@ async def inspect(path, online=False, engines=("yandex",), limit=10, text_search
             if ocr_query:
                 from .research import search
 
-                candidates = await search(ocr_query, limit=limit)
+                candidates = await search(ocr_query, limit=limit, persist=persist)
                 results.extend(
                     {
                         "engine": "ocr-text-search",

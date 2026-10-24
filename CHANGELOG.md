@@ -1,5 +1,19 @@
 # Changelog: web (formerly xsearch)
 
+## [2.1.0] - 2026-10-25
+- Correct everyday search UX: -n is a target; -p/-P are page-request-budget aliases;
+  --start-page is explicit. Stop at target and report exact shortfall/reason.
+- Rank by term coverage plus provider score by default; provider mode uses the
+  numeric score instead of the unsorted API array. Merge all duplicate provenance.
+- Sources column lists every contributor; complete URLs fold instead of ellipsizing.
+- Expose per-engine snapshot coverage and separate upstream refusal from local
+  backend failure. No irrelevant Docker/VPN restart remedy for CAPTCHA/429.
+- Add private labelled query snapshots, explicit fresh mode, stale-on-error
+  qualification and bounded keyless fallback (Yahoo/Yep/MWMBL), respecting -e.
+- Add offline show for comparison of the exact same table/JSON data; no new search.
+- Live original failing case collected 30 candidates in three page requests;
+  a repeated table request reused the snapshot without contacting providers.
+
 ## [2.0.0] - 2026-10-24
 - Breaking executable/package migration: web / k-web / k_web, repository web;
   configuration/cache moved without destroying existing evidence. Historical

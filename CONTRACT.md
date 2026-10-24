@@ -20,6 +20,19 @@ must not become successful empty search results.
 
 ## Discovery
 
+### 2.1 collection/presentation amendment
+
+- -n is a best-effort unique-candidate target. -p/-P cap page requests;
+  --start-page alone selects the starting index page. Stop reasons and shortfalls
+  are explicit. Sources and complete folded URLs are presentation invariants.
+- Format never chooses engines or changes a snapshot's candidate list. show
+  replays saved data without network; regular repeat requests can use a labelled
+  private TTL snapshot. Fresh forbids cache fallback; no-save disables persistence.
+- Default relevance combines term coverage and numeric provider score. Explicit
+  provider ranking uses that score, not unsorted API arrival order.
+- Upstream refusal is not a local Docker failure. No Docker/VPN restart advice
+  for CAPTCHA/429; optional bounded alternative indexes respect explicit -e.
+
 Queries pass through unchanged, including quotes, site:, filetype:, intitle:,
 OR and exclusions, subject to each upstream engine's actual syntax. Extra JSON
 parameters are explicit. Unknown engines fail. Pages, output limit, relevance

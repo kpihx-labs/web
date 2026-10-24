@@ -39,16 +39,44 @@ SearXNG JSON or @file, while preserving the query/JSON response contract.
 Unknown engine names fail rather than silently querying defaults. `provider_fields`
 retains raw result metadata, including image URLs and provider-specific fields.
 
-`-P` is the index-page budget; `-p` selects the starting page. `-n` limits the
-returned unique candidates, not the number of pages fetched. `-n 0` returns all
-candidates within the explicit page budget. Empty pages stop pagination; this
-does not prove there are no further indexed sources. Output records attempted
-pages, unique candidate count, upstream problems and non_exhaustive=true.
-Provider ranking is default; `-k lexical` is an optional transparent word-overlap
-heuristic, not identity confirmation or semantic ranking. Regex/domain filtering
+`-n 30` is a best-effort collection target: fetch further pages until 30 unique
+filtered candidates, source exhaustion/failure or the page-request budget. Both
+`-p` and legacy `-P` now mean --max-pages (default 3); --start-page/-s is separate.
+This corrects 2.0's confusing -p=start/-P=count distinction. `-n 0` collects within
+the full explicit budget. Output reports actual requests, counts and stop_reason;
+it never pads or invents results when the target cannot be reached.
+Default relevance ranking orders term coverage then SearXNG's numeric aggregate
+score. `-k provider` sorts by that score alone (not API array/arrival order);
+`-k lexical` uses term coverage only. None establishes identity or semantic truth.
+Regex/domain filtering
 precedes the display limit. Regular expressions use a configurable regex_timeout
 budget rather than unbounded backtracking. URL dedup preserves meaningful query/path case.
 SafeSearch `-m 0/1/2` is requested upstream; off does not remove upstream censorship.
+
+Repeated identical searches reuse a labelled private snapshot for 300 seconds,
+independent of table/JSON format. --fresh/-F forces live collection and forbids
+stale fallback. --no-save also disables query-cache persistence/reuse. On failure,
+a default request may return a clearly marked stale snapshot up to 24 hours old,
+with partial status and the error; it is never represented as a new live result.
+TTL, max pages, page delay and fallback_engines are plain configurable SETTINGS.
+If defaults stall and a page-request budget remains, keyless Yahoo/Yep/MWMBL are
+queried once as an explicit alternative batch. No IP/account switching, CAPTCHA
+bypass or rate-limit evasion occurs. Explicit -e choices are not silently replaced.
+
+The table shows **Sources**, a full contributor list, and folds complete URLs
+without ellipses. Engine coverage distinguishes contributions, CAPTCHA, rate
+limits and no-results-reported; the latter is not proof an engine was queried or
+is healthy. Provider refusal does not recommend restarting Docker/VPN. Search
+reads index snippets; use fetch separately to inspect actual page content.
+
+```sh
+web search 'KAMDEM Ivann' -n 30 -p 5
+web show /tmp/web-results/SEARCH_SNAPSHOT.json -f table
+web show /tmp/web-results/SEARCH_SNAPSHOT.json -f json
+```
+`show` renders exactly the saved snapshot without any network request, allowing
+an honest table/JSON comparison. Different live requests may receive different
+provider responses, even when their query text is identical.
 
 ## Fetch, inspection, sessions and exact downloads
 

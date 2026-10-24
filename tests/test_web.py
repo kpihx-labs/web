@@ -224,6 +224,13 @@ def test_optional_onion_failure_retains_surface_results(monkeypatch):
     class Working:
         unresponsive_engines = []
 
+        async def get_engines(self):
+            return {
+                "engines": [
+                    {"name": "fixture", "enabled": True, "categories": ["general"]}
+                ]
+            }
+
         async def search(self, query, **kwargs):
             return [
                 SearchResult(
@@ -238,6 +245,9 @@ def test_optional_onion_failure_retains_surface_results(monkeypatch):
             ]
 
     class Failed:
+        async def get_engines(self):
+            raise BackendError("ONION_UNAVAILABLE", "optional", "Tor not ready")
+
         async def search(self, query, **kwargs):
             raise BackendError("ONION_UNAVAILABLE", "optional", "Tor not ready")
 
@@ -255,6 +265,13 @@ def test_user_regex_has_a_time_budget(monkeypatch):
     class Backend:
         unresponsive_engines = ()
 
+        async def get_engines(self):
+            return {
+                "engines": [
+                    {"name": "fixture", "enabled": True, "categories": ["general"]}
+                ]
+            }
+
         async def search(self, query, **kwargs):
             return [
                 SearchResult(
@@ -269,7 +286,10 @@ def test_user_regex_has_a_time_budget(monkeypatch):
             ]
 
     monkeypatch.setattr(research, "SurfaceSearcher", Backend)
-    monkeypatch.setattr(research, "settings", lambda: {"regex_timeout": 0.001})
+    options = research.settings()
+    monkeypatch.setattr(
+        research, "settings", lambda: {**options, "regex_timeout": 0.001}
+    )
     with pytest.raises(WebError, match="regex_timeout"):
         asyncio.run(research.search("fixture", regex="(a+)+$"))
 

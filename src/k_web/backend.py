@@ -20,12 +20,13 @@ class BackendError(RuntimeError):
         self.code = code
         self.endpoint = endpoint
         self.detail = detail
-        super().__init__(
-            f"{code}: {endpoint}: {detail}\n"
-            "Run web doctor. In your searxng project run make health; "
-            "if its Docker network/services are broken, run make recover. "
-            "Check the configured searxng_url before changing anything else."
+        self.action = (
+            "Providers are limited/blocked, not Docker. Respect cooldowns, use an available engine (-e), "
+            "or reuse a labelled cached snapshot. Restarting Docker/VPN is not the remedy."
+            if code.startswith("UPSTREAM_")
+            else "Run web doctor and make health in searxng; use make recover only for a confirmed local service/network failure."
         )
+        super().__init__(f"{code}: {endpoint}: {detail}\n{self.action}")
 
 
 class SurfaceSearcher:
