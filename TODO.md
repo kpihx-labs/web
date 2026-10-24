@@ -1,7 +1,11 @@
-# TODO — xsearch
+# Optional future research (not advertised as implemented)
 
-- [ ] Complete legwork.i2p HTML scraper for full eepsites results coverage when I2P daemon is active.
-- [ ] Add phone number validation formatting (E.164 standardization via phonenumbers library).
-- [ ] Add crawler regex filter `--regex-filter` to restrict saved pages during recursive crawling.
-- [ ] Future Architecture Investigation: Evaluate Scrapy integration (for massive multi-week database-backed crawling with rate-limiting and resume-on-crash capabilities).
-- [ ] Future Architecture Investigation: Evaluate Crawl4AI / Playwright integration (for autonomous JavaScript SPA rendering, dynamic DOM execution, and automated popup dismissal without manual session handover).
+- Evaluate local embeddings for semantic document comparison, with explicit model,
+  memory budget and a measured paraphrase benchmark; lexical overlap is not enough.
+- Benchmark Scrapy and Crawl4AI against the static crawler for industrial resumable
+  crawls and JS-only sites. Keep browser-proxy independent and credential scopes explicit.
+- Maintain reverse-image adapters as provider pages change; no CAPTCHA bypass claim.
+- Evaluate a trustworthy query-by-humming provider only if a genuinely sustainable
+  free API exists. SongRec's limitations remain explicit.
+- Add an I2P search adapter only after verifying a real maintained index/API and
+  test corpus. Current proxy-based fetch is not global darknet search.

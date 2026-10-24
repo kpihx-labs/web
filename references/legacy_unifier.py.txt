@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+from uuid import uuid4
 
 import docx
 import exifread
@@ -26,6 +27,7 @@ from PIL import Image
 from rich.console import Console
 from rich.table import Table
 
+from .backend import BackendError, SurfaceSearcher
 from .config import CONFIG
 
 # Auto-save directory standard mimicking Exa CLI
@@ -128,11 +130,11 @@ class DocumentAuditResult:
 def auto_save_results(data: Any, prefix: str, custom_dir: Optional[str] = None) -> Path:
     """Auto-saves any result payload to /tmp/xsearch-results/ with ISO timestamp (Exa style)."""
     target_dir = Path(custom_dir) if custom_dir else AUTOSAVE_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     clean_prefix = re.sub(r"[^\w\-]", "_", prefix)[:30]
-    filename = f"{clean_prefix}_{timestamp_str}.json"
+    filename = f"{clean_prefix}_{timestamp_str}_{uuid4().hex[:8]}.json"
     save_path = target_dir / filename
 
     if hasattr(data, "__dataclass_fields__"):
@@ -142,7 +144,9 @@ def auto_save_results(data: Any, prefix: str, custom_dir: Optional[str] = None) 
     else:
         payload = data
 
-    save_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    descriptor = os.open(save_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2, ensure_ascii=False)
     return save_path
 
 
@@ -291,84 +295,6 @@ async def check_wayback_machine(target_url: str) -> WaybackArchiveResult:
     return WaybackArchiveResult(url=target_url, is_archived=False)
 
 
-class SurfaceSearcher:
-    """Queries local SearXNG metasearch instance with unlimited parameters."""
-
-    def __init__(self, base_url: str = CONFIG.searxng_url):
-        self.base_url = base_url.rstrip("/")
-
-    async def get_engines(self) -> Dict[str, Any]:
-        """Fetch all configured engines from SearXNG."""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{self.base_url}/config")
-                if resp.status_code == 200:
-                    return resp.json()
-        except Exception:
-            pass
-        return {}
-
-    async def search(
-        self,
-        query: str,
-        engines: Optional[str] = None,
-        categories: Optional[str] = None,
-        language: str = "all",
-        page: int = 1,
-        safe_search: int = 0,
-        time_range: Optional[str] = None,
-        limit: int = 20,
-        timeout: float = CONFIG.default_timeout_s,
-        custom_headers: Optional[Dict[str, str]] = None,
-    ) -> List[SearchResult]:
-        params: Dict[str, Any] = {
-            "q": query,
-            "format": "json",
-            "pageno": page,
-            "safesearch": safe_search,
-            "language": language,
-        }
-        if engines:
-            params["engines"] = engines
-        if categories:
-            params["categories"] = categories
-        if time_range:
-            params["time_range"] = time_range
-
-        headers = custom_headers or {}
-        results: List[SearchResult] = []
-        try:
-            async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-                resp = await client.get(f"{self.base_url}/search", params=params)
-                resp.raise_for_status()
-                data = resp.json()
-
-            raw_results = data.get("results", [])
-            for r in raw_results[:limit]:
-                title = r.get("title", "")
-                snippet = r.get("content", "")
-                full_text = f"{title} {snippet}"
-                entities = extract_osint_entities(full_text)
-
-                results.append(
-                    SearchResult(
-                        title=title,
-                        url=r.get("url", ""),
-                        snippet=snippet,
-                        source=f"searxng:{r.get('engine', 'unknown')}",
-                        engine=r.get("engine", "unknown"),
-                        category="surface",
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                        extracted_emails=entities["emails"],
-                        extracted_phones=entities["phones"],
-                    )
-                )
-        except Exception as e:
-            if CONFIG.debug:
-                print(f"[SurfaceSearcher] Error: {e}", file=sys.stderr)
-        return results
-
-
 class OnionSearcher:
     """Queries dark web .onion engines through SOCKS5, torsocks, or oniux."""
 
@@ -408,6 +334,7 @@ class OnionSearcher:
                 cookies=custom_cookies,
                 timeout=timeout,
             )
+            r.raise_for_status()
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
                 for b in soup.find_all("b"):
@@ -437,9 +364,9 @@ class OnionSearcher:
                             )
                             if len(results) >= limit:
                                 break
-        except Exception as e:
-            if CONFIG.debug:
-                print(f"[OnionSearcher:tor66] Error: {e}", file=sys.stderr)
+        except (requests.RequestException, ValueError) as error:
+            raise BackendError("ONION_SEARCH_FAILED", "Tor66 via configured Tor proxy",
+                               f"{type(error).__name__}. Check Tor connectivity and the hidden service; retry later.") from None
         return results
 
     def _search_with_wrapper(
@@ -450,19 +377,22 @@ class OnionSearcher:
     ) -> List[SearchResult]:
         wrapper = shutil.which(self.transport)
         if not wrapper:
-            return self._search_tor66_direct(query, limit=limit, timeout=timeout)
+            raise BackendError("TRANSPORT_UNAVAILABLE", self.transport,
+                               "Requested isolation wrapper is missing; install it or explicitly select another transport")
 
         url = (
             f"http://tor66sewebgixwhcqfnp5inzp5x5uohhdy3kvtnyfxc2e5mxiuh34iid.onion/search"
             f"?q={urllib.parse.quote(query)}&sorttype=rel&page=1"
         )
 
-        cmd = [wrapper, "curl", "-s", "-A", self.headers["User-Agent"], url]
+        cmd = [wrapper, "curl", "--fail", "--silent", "--show-error", "-A", self.headers["User-Agent"], url]
         results: List[SearchResult] = []
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout
             )
+            if proc.returncode:
+                raise ValueError(f"Isolation wrapper exited with status {proc.returncode}")
             if proc.returncode == 0:
                 soup = BeautifulSoup(proc.stdout, "html.parser")
                 for b in soup.find_all("b"):
@@ -492,9 +422,9 @@ class OnionSearcher:
                             )
                             if len(results) >= limit:
                                 break
-        except Exception as e:
-            if CONFIG.debug:
-                print(f"[OnionSearcher:{self.transport}] Error: {e}", file=sys.stderr)
+        except (subprocess.SubprocessError, OSError, ValueError) as error:
+            raise BackendError("ONION_TRANSPORT_FAILED", self.transport,
+                               f"{type(error).__name__}. Check wrapper permissions and Tor reachability; no direct fallback was used") from None
         return results
 
     async def search(
@@ -528,7 +458,7 @@ class I2PSearcher:
     async def search(
         self, query: str, limit: int = 20, timeout: float = CONFIG.default_timeout_s
     ) -> List[SearchResult]:
-        return []
+        raise BackendError("SOURCE_NOT_IMPLEMENTED", "I2P", "I2P search is not implemented; disable --i2p instead of interpreting an empty list")
 
 
 class ContentFetcher:
@@ -847,6 +777,8 @@ class DocumentAuditor:
             for r in results:
                 if isinstance(r, list):
                     hash_matches.extend(r)
+                elif isinstance(r, Exception):
+                    raise r
 
         if check_plagiarism and extracted_text:
             lines = [l.strip() for l in extracted_text.splitlines() if len(l.strip()) > 40]
@@ -860,6 +792,8 @@ class DocumentAuditor:
                 for r in results:
                     if isinstance(r, list):
                         similarity_matches.extend(r)
+                    elif isinstance(r, Exception):
+                        raise r
 
         if check_wayback:
             # Check if any URL embedded in the document has historical snapshots on Wayback

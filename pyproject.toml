@@ -1,21 +1,22 @@
 [project]
-name = "xsearch"
-version = "1.3.0"
-description = "Sovereign ultra-flexible multi-network search, crawl & media audit CLI across Surface Web, Tor .onion, and I2P"
+name = "k-web"
+version = "2.0.0"
+description = "Private CLI for metasearch, verified retrieval, bounded crawling and media investigation"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4",
-    "cssselect",
-    "exifread",
+    "defusedxml>=0.7.1",
+    "fpdf2>=2.8.9",
     "httpx[socks]",
     "lxml",
+    "phonenumbers>=9.0.41",
     "picimagesearch",
     "pillow",
     "pypdf",
-    "pyquery",
     "python-docx",
+    "regex>=2026.9.29",
     "requests[socks]",
     "rich",
     "typer",
@@ -27,14 +28,34 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff", "pyright", "pytest"]
+dev = []
 
 [project.scripts]
-xsearch = "xsearch.cli:main"
+web = "k_web.cli:main"
+
+[project.urls]
+Repository = "https://github.com/kpihx-labs/web"
+GitLab = "https://gitlab.com/kpihx-labs/web"
+Issues = "https://github.com/kpihx-labs/web/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "xsearch"
+module-name = "k_web"
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "reportlab>=5.1.0",
+]

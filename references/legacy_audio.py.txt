@@ -1,0 +1,95 @@
+"""Music identification, not speech transcription. No silent provider fallback."""
+
+import base64
+import hashlib
+import hmac
+import json
+import math
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+import requests
+
+from .user_config import credentials
+
+
+def run(command: list[str], timeout: float) -> subprocess.CompletedProcess:
+    if not shutil.which(command[0]):
+        raise ValueError(f"Missing executable: {command[0]}. See README installation instructions.")
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode:
+        raise ValueError(f"{command[0]} failed (exit {result.returncode}); check device/input and installation.")
+    return result
+
+
+def signature(key: str, secret: str, timestamp: str) -> str:
+    message = f"POST\n/v1/identify\n{key}\naudio\n1\n{timestamp}"
+    return base64.b64encode(hmac.new(secret.encode(), message.encode(), hashlib.sha1).digest()).decode()
+
+
+def identify(path: Path | None, provider: str, mode: str, record: float | None,
+             source: str, offset: float, duration: float, timeout: float) -> dict:
+    if mode not in {"recording", "hum"}:
+        raise ValueError("Mode must be recording or hum.")
+    provider = ("acrcloud" if mode == "hum" else "songrec") if provider == "auto" else provider
+    if provider not in {"songrec", "acrcloud"}:
+        raise ValueError("Provider must be auto, songrec or acrcloud.")
+    if mode == "hum" and provider != "acrcloud":
+        raise ValueError("SongRec fingerprints original recordings, not hummed melodies; use acrcloud.")
+    if (path is None) == (record is None):
+        raise ValueError("Provide exactly one audio file or --record SECONDS.")
+    if (not all(math.isfinite(x) for x in (duration, offset, timeout))
+            or timeout <= 0 or duration <= 0 or offset < 0
+            or (record is not None and (not math.isfinite(record) or record <= 0))):
+        raise ValueError("Durations must be positive; offset must be nonnegative.")
+    if path is not None and not path.is_file():
+        raise ValueError("Audio file does not exist.")
+    auth = credentials(mode) if provider == "acrcloud" else None
+    with tempfile.TemporaryDirectory(prefix="xsearch-audio-") as directory:
+        sample = Path(directory) / "sample.wav"
+        command = ["ffmpeg", "-nostdin", "-v", "error"]
+        if record is not None:
+            command += ["-f", "pulse", "-i", source, "-t", str(record)]
+        else:
+            command += ["-ss", str(offset), "-i", str(path), "-t", str(duration)]
+        command += ["-ac", "1", "-ar", "16000", str(sample)]
+        run(command, timeout + (record or 0))
+        if provider == "songrec":
+            result = json.loads(run(["songrec", "audio-file-to-recognized-song", str(sample)], timeout).stdout)
+            status = "matched" if result.get("track") else "no_match"
+        else:
+            assert auth is not None
+            host, key, secret = auth
+            if "/" in host or not host.endswith(".acrcloud.com"):
+                raise ValueError("ACRCloud HOST must be the project hostname ending in .acrcloud.com.")
+            if sample.stat().st_size >= 5_000_000:
+                raise ValueError("ACRCloud requires a sample below 5 MB; reduce duration.")
+            timestamp = str(int(time.time()))
+            data = {"access_key": key, "timestamp": timestamp, "data_type": "audio",
+                    "signature_version": "1", "sample_bytes": sample.stat().st_size,
+                    "signature": signature(key, secret, timestamp)}
+            with sample.open("rb") as stream:
+                response = requests.post(f"https://{host}/v1/identify", data=data,
+                                         files={"sample": ("sample.wav", stream, "audio/wav")}, timeout=timeout)
+            response.raise_for_status()
+            result = response.json()
+            code = result.get("status", {}).get("code")
+            if code not in (0, 1001):
+                raise ValueError(f"ACRCloud returned status code {code}; check project permissions/quota.")
+            status = "matched" if code == 0 else "no_match"
+    tracks = []
+    if provider == "songrec" and result.get("track"):
+        track = result["track"]
+        tracks.append({"title": track.get("title"), "artist": track.get("subtitle"),
+                       "url": track.get("url"), "isrc": track.get("isrc")})
+    elif provider == "acrcloud":
+        meta = result.get("metadata", {})
+        for track in meta.get("music", []) + meta.get("humming", []):
+            tracks.append({"title": track.get("title"),
+                           "artist": ", ".join(a.get("name", "") for a in track.get("artists", [])),
+                           "score": track.get("score"), "acrid": track.get("acrid"),
+                           "external_metadata": track.get("external_metadata", {})})
+    return {"provider": provider, "mode": mode, "status": status, "matches": tracks, "result": result}

@@ -1,109 +1,54 @@
-# CONTRACT
+# web contract v2
 
-This document is the non-negotiable source of truth for the `xsearch` project contract.
+Executable: web. Distribution/import: k-web / k_web. Historical xsearch behavior
+is archived under references and is not the active contract.
 
-If implementation, wrappers, or docs conflict with this contract, this contract wins.
+## Common boundary
 
----
+All result commands emit action, UTC timestamp, status and data. Formats: JSON,
+JSONL, CSV, Markdown and Rich terminal tables/previews. Autosaves are unique, owner-only
+JSON files under /tmp/web-results, overridable per command or disabled with -N.
+Request credential fields are not added to logs/metadata. Retrieved content can
+itself contain sensitive data: review private exports before sharing them.
+Existing downloads/reports are
+never overwritten. HTML is escaped and offline; PDF is a real Unicode-font PDF.
 
-## 1) Metadata
+Exit 0: completed. Exit 2: invalid input/failed operation, actionable stderr.
+Exit 3: usable partial results, access wall or best-effort humming. Success of
+HTTP transport is not proof that requested content was read. Backend failures
+must not become successful empty search results.
 
-- `schema_version`: `xsearch.contract.v1`
-- `contract_version`: `1.3.0`
+## Discovery
 
----
+Queries pass through unchanged, including quotes, site:, filetype:, intitle:,
+OR and exclusions, subject to each upstream engine's actual syntax. Extra JSON
+parameters are explicit. Unknown engines fail. Pages, output limit, relevance
+heuristics and upstream failures are reported; coverage is never exhaustive.
+Changing output limit alone does not fetch further pages.
 
-## 2) Conventions
+## Retrieval
 
-- Multi-network search, crawl, reverse visual OSINT, and document forensics: Surface web (SearXNG API), Dark web (Tor .onion live), and Deep/Encrypted darknet (I2P eepsites).
-- Deterministic deduplication based on normalized URL (strips URL fragments, query parameters, scheme/www variances).
-- Subcommands: `search`, `fetch`, `crawl`, `image`, `doc`, `similar`, and `engines`.
-- Auto-save convention: All command executions automatically serialize their JSON payload with ISO timestamp to `/tmp/xsearch-results/` (mimicking Exa CLI design), with override via `--save-dir` or `--no-save`.
-- Autonomous reporting: Full standalone HTML reports exportable via `--report <path.html>`.
-- Zero censorship & zero hardcoded bounds: arbitrary page limits, recursive depths (`-D/--depth`), custom cookies (`-C/--cookie-file`), custom headers (`-H/--header`), and proxy overrides (`--proxy`).
+Only HTTP(S), TLS verified, scoped cookie jar and origin-scoped custom headers.
+Private destinations require explicit opt-in; proxy-based DNS/redirect routing
+never silently downgrades Tor/I2P to direct. DNS validation is a best-effort
+guard, not a hardened hostile-network SSRF sandbox. Response budgets apply.
+Fetch/crawl use the same transport and parse links from the same fetched body.
+Crawl is paced, robots-aware, bounded, same-host and static HTML, not browser JS.
 
----
+## Evidence and media
 
-## 3) Shared types
+Documents are inspected offline unless online quote disclosure is explicit.
+Supported parsing: PDF with optional raster OCR, DOCX tables, ODT/PPTX XML,
+UTF-8 text/Markdown/CSV/JSON/HTML/XML/RST/TeX. Unsupported binary formats fail.
+Exact-file evidence requires a byte hash match. Lexical similarity/excerpts are
+not semantic equivalence, attribution, identity confirmation or plagiarism proof.
+Image uploads are opt-in and original EXIF is removed from submitted pixels.
+SongRec handles recordings; hum is a qualified fingerprint attempt, not a
+melody engine. ACRCloud and paid API configuration are removed.
 
-### `SearchResult`
+## Lifecycle
 
-| Field | Type | Description |
-|---|---|---|
-| `title` | `str` | Title of the web document / hidden service |
-| `url` | `str` | Normalized target URL (clearnet or `.onion`) |
-| `snippet` | `str` | Context excerpt or description |
-| `source` | `str` | Network and engine identifier (e.g. `searxng:brave`, `onion:tor66`) |
-| `engine` | `str` | Upstream search engine name |
-| `category` | `str` | Network tier: `surface`, `onion`, or `i2p` |
-| `timestamp` | `str` | ISO 8601 UTC timestamp of execution |
-| `score` | `float` | Relevance score |
-| `extracted_emails` | `List[str]` | Discovered email addresses via OSINT regex |
-| `extracted_phones` | `List[str]` | Discovered phone numbers via OSINT regex |
-
-### `ExifMetadata`
-
-| Field | Type | Description |
-|---|---|---|
-| `camera_make` | `str` | Hardware camera manufacturer (e.g. Apple, Canon) |
-| `camera_model` | `str` | Camera/phone model name |
-| `date_taken` | `str` | Original EXIF capture timestamp |
-| `latitude` | `Optional[float]` | Decimal GPS latitude |
-| `longitude` | `Optional[float]` | Decimal GPS longitude |
-| `altitude` | `Optional[float]` | GPS elevation above sea level in meters |
-| `software` | `str` | Firmware or image editing software |
-| `has_gps` | `bool` | True if valid GPS coordinates were extracted |
-
-### `ImageAuditResult`
-
-| Field | Type | Description |
-|---|---|---|
-| `file_path` | `str` | Absolute path to analyzed image |
-| `file_name` | `str` | Image basename |
-| `sha256` | `str` | Cryptographic SHA256 image checksum |
-| `exif` | `ExifMetadata` | Extracted camera, date, and GPS geolocation |
-| `matches` | `List[ImageSearchResult]` | Discovered web matches across vision engines |
-
-### `WaybackArchiveResult`
-
-| Field | Type | Description |
-|---|---|---|
-| `url` | `str` | Audited web resource URL |
-| `is_archived` | `bool` | True if archived snapshot exists on Wayback Machine |
-| `archive_url` | `str` | Direct link to historical snapshot |
-| `snapshot_timestamp` | `str` | Timestamp of closest historical capture |
-
-### `DocumentAuditResult`
-
-| Field | Type | Description |
-|---|---|---|
-| `file_path` | `str` | Canonical local file path |
-| `file_name` | `str` | Basename of audited document |
-| `file_size_bytes` | `int` | Document size in bytes |
-| `file_type` | `str` | Detected format (`PDF`, `DOCX`, `MD`, `TXT`, `CSV`) |
-| `sha256` | `str` | Cryptographic SHA256 file checksum |
-| `char_count` | `int` | Extracted textual character count |
-| `extracted_text_preview` | `str` | Clean excerpt preview |
-| `extracted_emails` | `List[str]` | Discovered email addresses |
-| `extracted_phones` | `List[str]` | Discovered phone numbers |
-| `hash_leak_matches` | `List[SearchResult]` | Search results matching the exact SHA256 hash |
-| `similarity_leak_matches`| `List[SearchResult]` | Search results matching verbatim sentence fragments |
-| `wayback_archives` | `List[WaybackArchiveResult]`| Historical snapshots for embedded links |
-
----
-
-## 4) Error model
-
-- `UPSTREAM_TIMEOUT`: Engine, page, or SOCKS5 relay timed out after `--timeout` parameter.
-- `UPSTREAM_UNREACHABLE`: SOCKS5 handshake failure or hidden service descriptor absent.
-- `PARSE_ERROR`: HTML structure divergence in scraping targets.
-- `IMAGE_LOOKUP_FAILED`: Reverse visual search engine changed DOM structure or triggered Cloudflare/Turnstile.
-- `AUTH_BLOCKED`: HTTP 401/403 requiring cookie injection or session handover via `browser-proxy`.
-
----
-
-## 5) Compliance rules
-
-- No secret or tracking cookie may ever be sent or recorded without explicit operator input.
-- Tor connections must support direct SOCKS5 proxy (`socks5h://127.0.0.1:9050`), `torsocks`, or kernel-isolated `oniux`.
-- No version constraints may be pinned in dependencies; uv owns dependency resolution.
+Setup never overwrites user configuration. Uninstall retains evidence. Purge
+previews/trashes owned runtime paths only, retaining source/shared native tools.
+Backend stop retains volumes; backend-purge requires confirmation and a backup.
+No query silently changes a VPN, firewall, browser session or service state.

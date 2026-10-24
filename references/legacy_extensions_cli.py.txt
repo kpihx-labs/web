@@ -1,0 +1,144 @@
+"""Audio and maps command surfaces; diagnostics never contaminate JSON stdout."""
+
+import json
+import os
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+import requests
+import typer
+from rich.console import Console
+from rich.json import JSON
+from rich.table import Table
+
+from .audio import identify
+from .maps import Maps, json_input, json_object, json_vertices
+from .user_config import initialize, settings
+
+err = Console(stderr=True)
+map_app = typer.Typer(help="Map operations with unrestricted provider JSON parameters.",
+                      context_settings={"help_option_names": ["-h", "--help"]})
+
+
+def emit(payload, operation: str, fmt: str, save_dir: Path | None, no_save: bool):
+    timestamp = datetime.now(UTC).isoformat()
+    envelope = {"operation": operation, "timestamp": timestamp, "data": payload}
+    if operation.startswith("map-"):
+        envelope["attribution"] = "OpenStreetMap contributors, ODbL; https://www.openstreetmap.org/copyright"
+    if fmt not in {"json", "table"}:
+        raise ValueError("Format must be json or table.")
+    if not no_save:
+        directory = save_dir or Path("/tmp/xsearch-results")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        name = f"{operation}_{datetime.now(UTC):%Y%m%d_%H%M%S_%f}_{uuid4().hex[:8]}.json"
+        path = directory / name
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(envelope, stream, ensure_ascii=False, indent=2)
+        err.print(f"Autosaved result to: {path}", markup=False)
+    if fmt == "json":
+        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+    else:
+        if operation == "audio":
+            table = Table(title=f"Audio: {payload['status']} ({payload['provider']}, {payload['mode']})")
+            for heading in ("Title", "Artist", "URL / ID"):
+                table.add_column(heading)
+            for match in payload["matches"]:
+                table.add_row(str(match.get("title") or ""), str(match.get("artist") or ""),
+                              str(match.get("url") or match.get("acrid") or ""))
+            Console().print(table)
+        else:
+            Console().print(JSON.from_data(envelope))
+
+
+def execute(action, operation, fmt, save_dir, no_save):
+    try:
+        emit(action(), operation, fmt, save_dir, no_save)
+    except (requests.RequestException, subprocess.TimeoutExpired) as exc:
+        # Provider exceptions may contain credentials/URLs. Do not print their content.
+        err.print(f"{operation} failed ({type(exc).__name__}); check endpoint/network/provider.")
+        raise typer.Exit(1) from None
+    except (ValueError, TypeError, OSError, TimeoutError) as exc:
+        err.print(str(exc), markup=False)
+        raise typer.Exit(1) from None
+
+
+def audio_command(
+    file: Path | None = typer.Argument(None),
+    record: float | None = typer.Option(None, "--record", "-r"),
+    mode: str = typer.Option("recording", "--mode", "-m"),
+    provider: str = typer.Option("auto", "--provider", "-p"),
+    source: str = typer.Option("default", "--source", "-s", help="Pulse/PipeWire source; a monitor records system output."),
+    offset: float = typer.Option(0, "--offset", "-O"),
+    duration: float = typer.Option(12, "--duration", "-d"),
+    timeout: float = typer.Option(30, "--timeout", "-T"),
+    fmt: str = typer.Option("table", "--format", "-f"),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
+    no_save: bool = typer.Option(False, "--no-save", "-N"),
+):
+    """Identify a recording or hummed melody. Never transcribe speech."""
+    execute(lambda: identify(file, provider, mode, record, source, offset, duration, timeout),
+            "audio", fmt, save_dir, no_save)
+
+
+@map_app.command("search")
+def map_search(
+    query: str,
+    params: str | None = typer.Option(None, "--params", "-P", help="JSON object or @file; Nominatim parameters."),
+    fmt: str = typer.Option("table", "--format", "-f"),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
+    no_save: bool = typer.Option(False, "--no-save", "-N"),
+):
+    """Locate a place. Public Nominatim: manual requests, <=1/s, no confidential data."""
+    execute(lambda: Maps(settings()).search(query, json_object(params)), "map-search", fmt, save_dir, no_save)
+
+
+@map_app.command("query")
+def map_query(
+    query: str = typer.Argument(..., help="Overpass QL or @file. Use a bounded area."),
+    params: str | None = typer.Option(None, "--params", "-P"),
+    fmt: str = typer.Option("table", "--format", "-f"),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
+    no_save: bool = typer.Option(False, "--no-save", "-N"),
+):
+    """Query arbitrary OSM tags and geometry through Overpass, without API keys."""
+    execute(lambda: Maps(settings()).query(
+        Path(query[1:]).read_text() if query.startswith("@") else query, json_object(params)),
+        "map-query", fmt, save_dir, no_save)
+
+
+@map_app.command("route")
+def map_route(
+    vertices: str = typer.Argument(..., help='Ordered JSON vertices: ["Paris",[2.3,48.8],"Versailles"] or @file.'),
+    profile: str | None = typer.Option(None, "--profile", "-p", help="Provider profile string, not a vehicle flag."),
+    params: str | None = typer.Option(None, "--params", "-P", help="Additional BRouter parameters as JSON or @file."),
+    fmt: str = typer.Option("table", "--format", "-f"),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
+    no_save: bool = typer.Option(False, "--no-save", "-N"),
+):
+    """Route an ordered path, using names and/or [longitude, latitude] vertices."""
+    execute(lambda: Maps(settings()).route(json_vertices(vertices), profile, json_object(params)),
+            "map-route", fmt, save_dir, no_save)
+
+
+@map_app.command("request")
+def map_request(
+    endpoint: str,
+    method: str = typer.Option("GET", "--method", "-X"),
+    params: str | None = typer.Option(None, "--params", "-P"),
+    body: str | None = typer.Option(None, "--body", "-b"),
+    fmt: str = typer.Option("json", "--format", "-f"),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
+    no_save: bool = typer.Option(False, "--no-save", "-N"),
+):
+    """Explicit raw JSON API escape hatch for evolving map services; no schema whitelist."""
+    execute(lambda: Maps(settings()).request(endpoint, method.upper(), json_object(params),
+                                            body=json_input(body) if body else None),
+            "map-request", fmt, save_dir, no_save)
+
+
+def setup_command():
+    """Initialize user config and an empty credentials template without overwriting."""
+    print(initialize())

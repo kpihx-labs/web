@@ -1,0 +1,57 @@
+"""Small, operator-owned configuration; never overwrite existing files."""
+
+import os
+import runpy
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+TEMPLATE = '''"""xsearch user settings. Provider-specific payloads remain unrestricted."""
+SETTINGS = {
+    "searxng_url": "http://127.0.0.1:8081",
+    "search_attempts": 3,
+    "search_retry_delay": 0.3,
+    "timeout": 30.0,
+    "geocoder": "https://nominatim.openstreetmap.org/search",
+    "overpass": "https://overpass-api.de/api/interpreter",
+    "overpass_method": "GET",
+    "router": "https://brouter.de/brouter",
+    "route_profile": "trekking",
+    "geocode_cache_seconds": 86400,
+    "user_agent": "xsearch/1.4 (personal CLI; manual requests)",
+}
+'''
+
+
+def config_dir() -> Path:
+    return Path(os.environ.get("XSEARCH_CONFIG_DIR", Path.home() / ".config/xsearch"))
+
+
+def initialize() -> Path:
+    directory = config_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    files = {
+        "config.py": TEMPLATE,
+        ".env": Path(__file__).with_name(".env.example").read_text(),
+    }
+    for name, text in files.items():
+        try:
+            fd = os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+    return directory
+
+
+def settings() -> dict:
+    return runpy.run_path(str(initialize() / "config.py"))["SETTINGS"]
+
+
+def credentials(mode: str) -> tuple[str, str, str]:
+    values = {**dotenv_values(initialize() / ".env"), **os.environ}
+    prefix = "ACRCLOUD_HUM" if mode == "hum" else "ACRCLOUD"
+    names = [f"{prefix}_{suffix}" for suffix in ("HOST", "ACCESS_KEY", "ACCESS_SECRET")]
+    if any(not values.get(name) for name in names):
+        raise ValueError(f"Set {', '.join(names)} manually in {config_dir() / '.env'}")
+    return str(values[names[0]]), str(values[names[1]]), str(values[names[2]])

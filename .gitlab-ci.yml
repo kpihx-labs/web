@@ -1,0 +1,12 @@
+image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+stages: [check]
+offline:
+  stage: check
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends zsh make nodejs poppler-utils tesseract-ocr fontconfig fonts-dejavu-core
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv sync
+    - uv tool install ruff && uv tool install pyright
+  script:
+    - make check
+    - make build
