@@ -130,6 +130,36 @@ def test_offline_image_metadata_has_no_upload(tmp_path):
     assert not result["uploaded_sanitized_pixels"] and not result["results"]
 
 
+def test_uploaded_pixels_do_not_retain_original_exif(tmp_path, monkeypatch):
+    path = tmp_path / "camera.jpg"
+    original = Image.new("RGB", (100, 100), "blue")
+    tags = original.getexif()
+    tags[271] = "Private camera identifier"
+    original.save(path, exif=tags)
+
+    class Network:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class Provider:
+        def __init__(self, **kwargs):
+            pass
+
+        async def search(self, file):
+            with Image.open(file) as uploaded:
+                assert not uploaded.getexif()
+                assert "exif" not in uploaded.info
+            return SimpleNamespace(raw=[])
+
+    monkeypatch.setattr(images, "Network", Network)
+    monkeypatch.setattr(images, "Yandex", Provider)
+    result = asyncio.run(images.inspect(path, online=True))
+    assert result["metadata"]["make"] == "Private camera identifier"
+
+
 def test_hum_is_a_qualified_default_attempt_without_paid_provider(monkeypatch):
     monkeypatch.setattr(audio.shutil, "which", lambda command: command)
     monkeypatch.setattr(

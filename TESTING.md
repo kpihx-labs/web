@@ -5,7 +5,7 @@ source-discussion review and the defects behind the design changes.
 
 ## Offline gates
 
-`make check`: Ruff lint/format, Pyright, and 39 regressions on this workstation.
+`make check`: Ruff lint/format, Pyright, and 40 regressions on this workstation.
 Coverage includes HTTP 200 auth walls, binary hashes, scoped cookies/custom headers,
 redirects across hosts/ports, Tor proxy preservation/no local DNS, I2P HTTP proxy
 protocol, robots, next links, one fetch per page, URL case/query semantics,

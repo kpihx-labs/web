@@ -41,6 +41,10 @@ Large fetched page payloads were not confused with independent source confirmati
     startup. Surface and optional onion workers now have independent startup,
     configuration and IPC endpoints. User-owned configs mount read-only into a
     non-root image layout instead of becoming container-owned host files.
+15. Pillow conversion can retain image metadata. The uploaded copy now explicitly
+    clears info/EXIF; a provider-mock regression inspects the actual temporary PNG
+    while preserving original metadata locally. No private user image was uploaded
+    during live testing; the live fixture was the public Python logo.
 
 ## Design boundaries
 

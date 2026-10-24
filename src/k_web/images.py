@@ -40,11 +40,19 @@ async def inspect(path, online=False, engines=("yandex",), limit=10, text_search
         metadata["date"] = str(details.get(36867, metadata["date"]))
         metadata["software"] = str(exif.get(305, ""))
         if 2 in gps and 4 in gps:
-            metadata["latitude"] = degrees(gps[2]) * (-1 if gps.get(1) == "S" else 1)
-            metadata["longitude"] = degrees(gps[4]) * (-1 if gps.get(3) == "W" else 1)
+            metadata["latitude"] = degrees(gps[2]) * (
+                -1 if gps.get(1) in ("S", b"S") else 1
+            )
+            metadata["longitude"] = degrees(gps[4]) * (
+                -1 if gps.get(3) in ("W", b"W") else 1
+            )
         if 6 in gps:
-            metadata["altitude_m"] = float(gps[6]) * (-1 if gps.get(5) == 1 else 1)
+            metadata["altitude_m"] = float(gps[6]) * (
+                -1 if gps.get(5) in (1, b"\x01") else 1
+            )
         image = ImageOps.exif_transpose(original).convert("RGBA")
+        image.info.clear()
+        image.getexif().clear()
     results, errors = [], []
     providers = {"yandex": Yandex, "google": Google, "bing": Bing}
     if set(engines) - providers.keys():
