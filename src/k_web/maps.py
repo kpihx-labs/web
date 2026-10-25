@@ -4,7 +4,9 @@ import fcntl
 import hashlib
 import json
 import os
+import tempfile
 import time
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -42,7 +44,7 @@ class Maps:
         self.session = requests.Session()
         self.session.trust_env = False
         self.session.headers["User-Agent"] = settings["user_agent"]
-        self.last_geocode = 0.0
+        self._geocodes = {}
 
     def request(
         self, endpoint: str, method: str = "GET", params=None, data=None, body=None
@@ -87,25 +89,38 @@ class Maps:
             ) from None
 
     def search(self, query: str, params: dict):
-        # Shared lock/cache also covers separate CLI invocations on this machine.
+        # Results exist only in this invocation's RAM, never under XDG_CACHE_HOME.
+        # A shared runtime lock stores ONLY a timestamp, never a query or result.
         directory = (
-            Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-            / "web/geocode"
+            Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
+            / f"web-rate-limit-{os.getuid()}"
         )
+        if directory.is_symlink():
+            raise ValueError("Refused symlink for the geocoder runtime rate limiter")
         directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        info = directory.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError(
+                "Geocoder runtime rate-limit directory must be owned by you with mode 0700"
+            )
         payload = {"q": query, "format": "jsonv2", **params}
         key = hashlib.sha256(
             json.dumps([self.settings["geocoder"], payload], sort_keys=True).encode()
         ).hexdigest()
-        cached = directory / f"{key}.json"
-        with (directory / "request.lock").open("a+") as lock:
+        capacity = self.settings.get(
+            "geocode_memory_entries", CONFIG.geocode_memory_entries
+        )
+        if not isinstance(capacity, int) or capacity < 0:
+            raise ValueError(
+                "geocode_memory_entries must be a nonnegative integer (0 disables RAM coalescing)"
+            )
+        if capacity and key in self._geocodes:
+            return deepcopy(self._geocodes[key])
+        descriptor = os.open(
+            directory / "geocode.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(descriptor, "r+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if (
-                cached.exists()
-                and time.time() - cached.stat().st_mtime
-                < self.settings.get("geocode_cache_seconds", 86400)
-            ):
-                return json.loads(cached.read_text())
             lock.seek(0)
             previous = float(lock.read() or 0)
             delay = 1.05 - (time.time() - previous)
@@ -118,8 +133,10 @@ class Maps:
                 lock.truncate()
                 lock.write(str(time.time()))
                 lock.flush()
-            cached.write_text(json.dumps(result))
-            cached.chmod(0o600)
+            if capacity:
+                if len(self._geocodes) >= capacity:
+                    self._geocodes.clear()
+                self._geocodes[key] = deepcopy(result)
             return result
 
     def point(self, value, near=None):

@@ -31,6 +31,18 @@ Optional native OCR/font tools are installed for these tests; CI provisions them
 setup, capability inspection, owned-state purge and make uninstall all passed.
 The user's actual configuration, evidence and global tool were not removed.
 
+### 2.3 result-persistence removal (2026-10-25)
+
+64 tests pass with lint/format/types. Regressions verify repeated searches make
+live backend calls, provider failure cannot recover a hidden stale result, old
+TTL settings cannot enable disk caching, geocoding coalesces only within an
+instance, and runtime files contain only a numeric pacing timestamp, never JSON.
+Explicit save-dir or WEB_RESULTS_DIR overrides under XDG_CACHE_HOME are refused
+before creating any directory or result JSON file.
+Live public Python search returned two candidates with labelled partial MWMBL
+timeout coverage; Polytechnique geocoding succeeded. Both searches saved evidence
+only under /tmp/web-results; the two purged cache paths stayed absent afterward.
+
 `tests/live_backend_lifecycle.py`: a unique throwaway Docker project with a 32-byte
 fixture volume. No-confirm purge refused; confirmed purge created a private .bak,
 its contents were verified, and only the throwaway volume was removed. Production

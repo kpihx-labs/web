@@ -25,8 +25,7 @@ class Config:
     regex_timeout: float = 0.25
     search_max_pages: int = 3
     search_page_delay: float = 1.0
-    search_cache_ttl: float = 300.0
-    search_stale_ttl: float = 86400.0
+    geocode_memory_entries: int = 128
     fallback_engines: tuple[str, ...] = ("yahoo", "yep", "mwmbl")
     # Heuristic guard for authenticated crawls; GET is not guaranteed side-effect-free.
     crawl_exclude_regex: str = r"(?i)/(?:logout|signout|delete|remove|unsubscribe|checkout)(?:[/?=]|$)|[?&](?:action|do)=(?:delete|remove|logout)"

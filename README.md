@@ -76,12 +76,17 @@ precedes the display limit. Regular expressions use a configurable regex_timeout
 budget rather than unbounded backtracking. URL dedup preserves meaningful query/path case.
 SafeSearch `-m 0/1/2` is requested upstream; off does not remove upstream censorship.
 
-Repeated identical searches reuse a labelled private snapshot for 300 seconds,
-independent of table/JSON format. --fresh/-F forces live collection and forbids
-stale fallback. --no-save also disables query-cache persistence/reuse. On failure,
-a default request may return a clearly marked stale snapshot up to 24 hours old,
-with partial status and the error; it is never represented as a new live result.
-TTL, max pages, page delay and fallback_engines are plain configurable SETTINGS.
+Search and geocoding results are NEVER saved/read under the persistent cache
+directory. Search is live on every invocation, including failures; --fresh/-F is
+retained as a redundant compatibility flag. Old cache TTL settings cannot restore
+disk caching. Automatic evidence is separate: /tmp/web-results by default, with
+--save-dir override or --no-save to disable it. To compare table/JSON without
+another provider request, use web show on the SAME selected /tmp result file.
+Geocoding deduplicates only within a Maps instance in RAM. Cross-process pacing
+keeps a timestamp-only lock under XDG_RUNTIME_DIR (fallback /tmp), never a JSON
+response, query or coordinate. Repeated commands can therefore contact providers
+again: respect limits, do not retry in a loop. Max pages, page delay and
+fallback_engines remain plain configurable SETTINGS.
 If defaults stall and a page-request budget remains, keyless Yahoo/Yep/MWMBL are
 queried once as an explicit alternative batch. No IP/account switching, CAPTCHA
 bypass or rate-limit evasion occurs. Explicit -e choices are not silently replaced.

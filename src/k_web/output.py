@@ -46,11 +46,16 @@ def render(record):
         )
     )
     if data.get("cache"):
-        console.print(
-            terminal_text(
-                f"Retrieval: {data['cache']['state']}; snapshot age {data['cache']['age_seconds']}s; live request: {data['cache']['live_request']}"
+        if data["cache"].get("disk_persistence") is False:
+            console.print(
+                "Retrieval: live, no persistent result cache. Replay a chosen /tmp result with web show to avoid another provider request."
             )
-        )
+        else:
+            console.print(
+                terminal_text(
+                    f"Historical snapshot: {data['cache']['state']}; age {data['cache']['age_seconds']}s; original live request: {data['cache']['live_request']}"
+                )
+            )
     rows = data.get("results", data.get("pages", data.get("engines")))
     if record["action"] == "image":
         console.print(JSON.from_data(data.get("metadata", {})))
@@ -195,6 +200,11 @@ def emit(action, data, *, fmt="table", save_dir=None, no_save=False, report=None
     text = json.dumps(record, ensure_ascii=False, indent=2)
     if not no_save:
         directory = Path(save_dir) if save_dir else results_dir()
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        if directory.resolve().is_relative_to(cache_root.resolve()):
+            raise WebError(
+                "Result JSON is forbidden under XDG_CACHE_HOME; use /tmp/web-results, another explicit evidence directory, or --no-save"
+            )
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = (
             directory

@@ -13,7 +13,6 @@ from urllib.robotparser import RobotFileParser
 
 import regex as re
 
-from . import __version__, search_cache
 from .backend import BackendError, SurfaceSearcher
 from .http import Session, WebError, canonical, host_matches, save_bytes
 from .user_config import settings
@@ -392,55 +391,14 @@ async def _collect(query, *, engines=None, network=None, limit=20, **kwargs):
 async def search(
     query, *, engines=None, network=None, limit=20, fresh=False, persist=True, **kwargs
 ):
-    """Collect a target count, with explicitly labelled snapshots, never format-specific retrieval."""
-    options = {
-        "engines": engines,
-        "network": network,
-        "limit": limit,
-        **kwargs,
-        "backends": settings().get("search_backends", {}),
-        "endpoint": settings().get("searxng_url"),
-        "version": __version__,
-        "defaults": {
-            name: settings()[name] for name in ("search_max_pages", "fallback_engines")
-        },
-    }
-    path = search_cache.location(query, options)
-    if persist and not fresh:
-        cached = search_cache.load(path, settings()["search_cache_ttl"])
-        if cached:
-            data, age = cached
-            return {
-                **data,
-                "cache": {
-                    "state": "snapshot",
-                    "age_seconds": age,
-                    "live_request": False,
-                },
-            }
-    try:
-        data = await _collect(
-            query, engines=engines, network=network, limit=limit, **kwargs
-        )
-    except Exception as error:
-        cached = (
-            search_cache.load(path, settings()["search_stale_ttl"])
-            if persist and not fresh
-            else None
-        )
-        if not cached:
-            raise
-        data, age = cached
-        return {
-            **data,
-            "partial": True,
-            "cache": {
-                "state": "stale_on_error",
-                "age_seconds": age,
-                "live_request": False,
-                "error": str(error),
-            },
-        }
+    """Always collect live. Legacy fresh/persist arguments cannot enable disk caching.
+
+    Explicit evidence saving belongs to the CLI output layer (/tmp by default).
+    Re-render it with web show; never consult a hidden persistent result cache.
+    """
+    data = await _collect(
+        query, engines=engines, network=network, limit=limit, **kwargs
+    )
     coverage = {}
     for backend in data.get("backends", []):
         for row in backend.get("engine_coverage", []):
@@ -449,9 +407,12 @@ async def search(
     data["engine_coverage"] = list(coverage.values())
     data["target_reached"] = not limit or len(data["results"]) >= limit
     data["partial"] = data["partial"] or not data["target_reached"]
-    data["cache"] = {"state": "live", "age_seconds": 0, "live_request": True}
-    if persist and data.get("results"):
-        search_cache.store(path, data)
+    data["cache"] = {
+        "state": "disabled",
+        "age_seconds": 0,
+        "live_request": True,
+        "disk_persistence": False,
+    }
     return data
 
 

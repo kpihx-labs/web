@@ -1,5 +1,16 @@
 # Changelog: web (formerly xsearch)
 
+## [2.3.0] - 2026-10-25
+- Operator privacy directive: remove persistent search and geocoding result caches
+  entirely; no TTL/config flag can re-enable disk results. Search is always live,
+  including on error; --fresh remains a documented compatibility no-op.
+- Keep separate timestamped /tmp evidence and explicit show replay; -N disables
+  automatic exports. Existing SearXNG IPC is not deleted.
+- Geocoding duplicates coalesce only in invocation-local RAM; shared pacing uses
+  a private runtime timestamp-only lock, without queries/coordinates/responses.
+- Purged only the operator's search/geocode cache directories through an isolated,
+  subsequently emptied trash; normal trash and unrelated cache state were retained.
+
 ### 2.2.0 distribution-name clarification - 2026-10-25
 - Operator-approved PyPI name: kpihx-web, after PyPI rejected k-web as too similar
   to an existing project. Executable web, import k_web, repository web, runtime

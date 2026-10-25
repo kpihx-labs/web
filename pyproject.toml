@@ -1,6 +1,6 @@
 [project]
 name = "kpihx-web"
-version = "2.2.0"
+version = "2.3.0"
 description = "Private CLI for metasearch, verified retrieval, bounded crawling and media investigation"
 readme = "README.md"
 license = {text = "MIT"}

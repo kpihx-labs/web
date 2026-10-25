@@ -65,14 +65,15 @@ def test_count_is_a_target_and_stops_as_soon_as_met(monkeypatch):
     assert len(backend.calls) == 2
 
 
-def test_same_snapshot_reused_without_another_provider_request(monkeypatch):
+def test_repeated_commands_are_live_without_persistent_result_reuse(monkeypatch):
     backend = Backend()
     monkeypatch.setattr(research, "SurfaceSearcher", lambda: backend)
     first = asyncio.run(research.search("fixture", limit=10))
     second = asyncio.run(research.search("fixture", limit=10))
     assert first["results"] == second["results"]
-    assert second["cache"]["state"] == "snapshot"
-    assert len(backend.calls) == 1
+    assert second["cache"]["state"] == "disabled"
+    assert second["cache"]["disk_persistence"] is False
+    assert len(backend.calls) == 2
 
 
 def test_shortfall_is_explicit_and_explicit_engines_never_fallback(monkeypatch):
@@ -99,17 +100,13 @@ def test_shortfall_is_explicit_and_explicit_engines_never_fallback(monkeypatch):
     assert not result["fallback_engines_used"]
 
 
-def test_provider_failure_does_not_erase_a_labelled_stale_snapshot(monkeypatch):
+def test_provider_failure_never_replays_hidden_stale_results(monkeypatch):
     backend = Backend()
     monkeypatch.setattr(research, "SurfaceSearcher", lambda: backend)
     asyncio.run(research.search("fixture", limit=10))
     backend.down = True
-    options = research.settings()
-    monkeypatch.setattr(
-        research, "settings", lambda: {**options, "search_cache_ttl": 0}
-    )
-    result = asyncio.run(research.search("fixture", limit=10))
-    assert result["partial"] and result["cache"]["state"] == "stale_on_error"
+    with pytest.raises(WebError):
+        asyncio.run(research.search("fixture", limit=10))
     with pytest.raises(WebError):
         asyncio.run(research.search("fixture", limit=10, fresh=True))
 

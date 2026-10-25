@@ -26,8 +26,10 @@ must not become successful empty search results.
   --start-page alone selects the starting index page. Stop reasons and shortfalls
   are explicit. Sources and complete folded URLs are presentation invariants.
 - Format never chooses engines or changes a snapshot's candidate list. show
-  replays saved data without network; regular repeat requests can use a labelled
-  private TTL snapshot. Fresh forbids cache fallback; no-save disables persistence.
+  replays selected /tmp evidence without network. Search always collects live;
+  no persistent search/geocoding JSON cache is ever read or written. Old TTL
+  settings cannot re-enable it; --fresh is a redundant compatibility flag.
+  --no-save disables the separate automatic evidence export.
 - Default relevance combines term coverage and numeric provider score. Explicit
   provider ranking uses that score, not unsorted API arrival order.
 - Upstream refusal is not a local Docker failure. No Docker/VPN restart advice
@@ -65,6 +67,9 @@ Setup never overwrites user configuration. Uninstall retains evidence. Purge
 previews/trashes owned runtime paths only, retaining source/shared native tools.
 Backend stop retains volumes; backend-purge requires confirmation and a backup.
 No query silently changes a VPN, firewall, browser session or service state.
+Result caches are forbidden under XDG_CACHE_HOME. Geocoding may deduplicate only
+in invocation-local RAM; cross-process pacing uses a runtime timestamp-only lock,
+not query strings, coordinates or responses. The existing IPC directory remains.
 
 ## 2.2 transparent-help and investigation amendment
 

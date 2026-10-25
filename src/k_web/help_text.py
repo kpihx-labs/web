@@ -3,8 +3,8 @@
 OPTIONS = {
     "version": "Print the installed package version from Python metadata and exit; no network. Example: web --version.",
     "format": "Output view: table is a human preview; json is the complete envelope; jsonl is one envelope per line; csv is spreadsheet-safe; md is Markdown. Example: -f json | jq '.data'. Notices/errors stay on stderr.",
-    "save": 'Directory for private timestamped JSON evidence (not raw downloads). Default: /tmp/web-results or WEB_RESULTS_DIR. Example: -S "$HOME/Research/evidence". Each save has a unique name; existing evidence is retained.',
-    "no_save": "Disable automatic evidence saves. Search and doc/image text discovery also avoid query-cache reads/writes. Example: -N for ephemeral inspection. Explicit --report/--download outputs are still written.",
+    "save": 'Directory for private timestamped JSON evidence (not raw downloads). Default: /tmp/web-results or WEB_RESULTS_DIR; destinations under XDG_CACHE_HOME are refused. Example: -S "$HOME/Research/evidence". Existing evidence is retained.',
+    "no_save": "Disable automatic evidence JSON saves (normally /tmp/web-results). Search/geocoding NEVER persist results under the cache directory, with or without this flag. Example: -N for ephemeral inspection. Explicit --report/--download outputs are still written.",
     "report": "Write a NEW standalone .html or real .pdf containing the full envelope. Example: -R /tmp/investigation.html or -R /tmp/investigation.pdf. Existing paths are refused; Unicode PDF needs fontconfig/DejaVu. No screenshot or plagiarism verdict is invented.",
     "engines": "Comma-separated exact engine names from 'web engines'; quote names containing spaces. Example: -e 'bing,google cse'. An explicit choice is not silently replaced by fallback engines; support for operators/pagination varies upstream.",
     "network": "Search backend(s), not a VPN region. Examples: -z surface, -z onion, -z surface,onion. Onion engines can be inferred from -e ahmia; enable their isolated worker with make backend-onion-up. Custom SearXNG-compatible backends go in search_backends settings.",
@@ -21,7 +21,7 @@ OPTIONS = {
     "safe": "Requested upstream SafeSearch: 0=off, 1=moderate, 2=strict. Example: -m 1. Off does not bypass legal restrictions, permissions, CAPTCHA or provider filtering.",
     "timeout": "Network/request time budget in seconds. Example: -T 15. Search retries share its request deadline; multiple pages/backends take separate budgets. This is not a guarantee the entire command finishes in that many seconds.",
     "search_params": 'Additional SearXNG parameters as a JSON object or @file. Example: -X \'{"time_range":"year"}\'. q/format/pageno are controlled by the CLI; conflicting engines are rejected. Native provider support still applies.',
-    "fresh": "Force live collection; do not reuse a query snapshot or return stale-on-error evidence. Example: --fresh -e bing. Repeating this can trigger provider limits; table/JSON normally share a labelled cache snapshot.",
+    "fresh": "Compatibility flag: search is ALWAYS live now; no disk cache or stale fallback can be enabled. Example: --fresh -e bing. Repeated calls consume provider tolerance; use web show on a /tmp result to compare formats without another request.",
     "cookies": "Authorized session file: browser JSON/storage cookies, flat JSON or Netscape cookies.txt. Example: -C /private/cookies.json. Domain/path/secure/expiry are honored; protect bearer credentials with mode 0600 and never paste values into chat. Browser-bound challenges may still fail.",
     "header": "Repeat 'Name: Value' headers or load @JSON. Example: -H 'Accept: application/json' -H @/private/headers.json. Custom headers stay on the seed origin and are stripped across origins. Keep real Authorization values out of shell history.",
     "proxy": "Explicit HTTP/SOCKS proxy URL. Example: -p socks5h://127.0.0.1:19050 for managed Tor. Environment proxies are ignored; hidden-network routing never silently falls back to direct. I2P requires its own HTTP proxy/router.",
@@ -53,7 +53,7 @@ OPTIONS = {
     "duration": "Seconds extracted from a FILE for identification; default 12. Example: -d 15 -O 30. Live capture duration comes from --record instead. Durations must be positive/finite.",
     "source": "PulseAudio/PipeWire input or monitor source name. Example: -s default or -s YOUR_MONITOR_SOURCE to capture system output. List sources with pactl list short sources; no microphone is opened by help.",
     "offset": "Start offset in a FILE, in seconds; default 0. Example: -O 45 -d 12. Not accepted with live --record, so capture is not silently delayed.",
-    "similar_limit": "Best-effort number of alternative-site candidates to discover. Example: -n 12 -e bing. Uses normal search target/cache/provider rules; no semantic-nearest-neighbor guarantee.",
+    "similar_limit": "Best-effort number of alternative-site candidates to discover. Example: -n 12 -e bing. Uses normal live search target/provider rules with no persistent result cache; no semantic-nearest-neighbor guarantee.",
     "live": "Also send a known public search canary to upstream engines. Example: web doctor -l -f json. Without this flag only local backend/frontend readiness is inspected; repeated live probes consume provider tolerance.",
     "confirm_purge": "Actually trash owned config/cache/state/default-result paths; otherwise preview only. Example: web purge -y AFTER make backend-down. Active IPC, symlinks and foreign-owned dirs are refused; source/shared tools/custom evidence remain.",
     "map_params": 'Provider-native JSON object or @file, without an artificial tag whitelist. Example: -P \'{"limit":3,"addressdetails":1}\'. Parameters/quotas belong to that provider; do not put credentials in URL queries.',
@@ -97,7 +97,7 @@ COMMANDS = {
         ],
     ),
     "search": (
-        "Collect a best-effort target of unique indexed candidates with explicit page-request budgets. All contributors are retained in Sources; numeric engine scores/term coverage rank candidates but do not confirm identity. Repeated formats can reuse the same labelled snapshot. Upstream CAPTCHA/rate limits are not local Docker failures; use show to compare identical saved data.",
+        "Collect live indexed candidates with explicit target/page-request budgets. Sources retain all contributors; numeric scores/term coverage do not confirm identity. No search results are read/written in persistent cache, even on provider failure. Automatic evidence stays under /tmp by default (-N disables it); web show replays a chosen result without network. CAPTCHA/rate limits are not Docker failures.",
         [
             'web search \'"KAMDEM Ivann" OR "Ivann Kamdem" site:github.com\' -n 30 -p 5',
             "web search '\"memory scheduling\" filetype:pdf after:2023 -slides' -e 'google cse' -p 3 -f json",
@@ -153,7 +153,7 @@ COMMANDS = {
         ],
     ),
     "similar": (
-        "Discover alternatives with a transparent text query derived from the site/domain. It reuses ordinary search target/cache/provider handling; it is NOT an embeddings-based similar-page API and does not verify that candidates have equivalent capabilities.",
+        "Discover alternatives with a transparent text query derived from the site/domain. Uses ordinary live search target/provider handling with no persistent result cache. It is NOT an embeddings-based similar-page API and does not verify equivalent capabilities.",
         [
             "web similar github.com -n 12 -e yahoo -f json",
             "web similar https://www.openstreetmap.org -n 8",
@@ -193,7 +193,7 @@ COMMANDS = {
         ],
     ),
     "map_search": (
-        "Geocode a place/address through the configured Nominatim-compatible endpoint. Native JSON parameters refine country/viewbox/address details. Manual public use is cached/throttled; no autocomplete/bulk harvesting. A name match is not proof that the returned location is the intended one; inspect coordinates and provider attribution.",
+        "Geocode a place/address through configured Nominatim-compatible APIs. Native JSON parameters refine country/viewbox/address details. No result is cached to disk; duplicate requests can coalesce only in this command's RAM. Shared runtime throttling stores only a timestamp, not queries/coordinates. No autocomplete/bulk harvesting; each new invocation can contact the provider again. Inspect coordinates/attribution.",
         [
             "web map search 'École polytechnique, Palaiseau' -P '{\"limit\":2,\"addressdetails\":1}'",
             'web map search Paris -P \'{"countrycodes":"fr","limit":3}\' -f json',

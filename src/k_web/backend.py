@@ -22,7 +22,7 @@ class BackendError(RuntimeError):
         self.detail = detail
         self.action = (
             "Providers are limited/blocked, not Docker. Respect cooldowns, use an available engine (-e), "
-            "or reuse a labelled cached snapshot. Restarting Docker/VPN is not the remedy."
+            "or explicitly replay a saved /tmp result with web show. No persistent result cache exists. Restarting Docker/VPN is not the remedy."
             if code.startswith("UPSTREAM_")
             else "Run web doctor and make health in searxng; use make recover only for a confirmed local service/network failure."
         )
