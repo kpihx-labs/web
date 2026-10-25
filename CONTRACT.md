@@ -1,6 +1,6 @@
 # web contract v2
 
-Executable: web. Distribution/import: k-web / k_web. Historical xsearch behavior
+Executable: web. Distribution/import: kpihx-web / k_web. Historical xsearch behavior
 is archived under references and is not the active contract.
 
 ## Common boundary

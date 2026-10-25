@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def main():
-    wheel = next((Path(__file__).resolve().parents[1] / "dist").glob("k_web-*.whl"))
+    wheel = next((Path(__file__).resolve().parents[1] / "dist").glob("kpihx_web-*.whl"))
     cache = subprocess.check_output(["uv", "cache", "dir"], text=True).strip()
     with tempfile.TemporaryDirectory(prefix="web-lifecycle-") as root:
         base = Path(root)

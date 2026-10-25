@@ -16,10 +16,10 @@ install: ## Install editable CLI and create user config without overwriting
 	@web setup
 uv-link: install ## Standard compatibility target
 uninstall: ## Remove only the executable/environment; retain user evidence
-	@$(UV) tool uninstall k-web
+	@$(UV) tool uninstall kpihx-web
 purge: backend-down ## Trash owned runtime data; retain source/shared native tools
 	@$(UV) run web purge --yes
-	@$(UV) tool uninstall k-web
+	@$(UV) tool uninstall kpihx-web
 purge-all: ## Confirmed backend backup/removal followed by app state/tool purge
 	@$(MAKE) backend-purge CONFIRM="$(CONFIRM)"
 	@$(MAKE) purge
@@ -28,11 +28,11 @@ check: ## Full active-package lint, types and offline regression tests
 	@ruff format --check src tests
 	@pyright --pythonpath .venv/bin/python src
 	@$(UV) run pytest -q
-build: ## Build only current k-web artifacts with uv_build
+build: ## Build only current kpihx-web artifacts with uv_build
 	@test ! -d dist || rm -r dist
 	@$(UV) build
 publish: build ## Explicit publish; use with-env in an interactive tmux ops pane
-	@$(UV) publish dist/k_web-*.whl dist/k_web-*.tar.gz
+	@$(UV) publish dist/kpihx_web-*.whl dist/kpihx_web-*.tar.gz
 push: ## Push current branch to both SSH remotes
 	@for remote in github gitlab; do git push $$remote "$$(git branch --show-current)" || exit; done
 backend-clone: ## Fetch sibling backend repo from HOST=github or gitlab

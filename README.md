@@ -1,12 +1,12 @@
-# web (k-web)
+# web (kpihx-web)
 
 Local-first research CLI: discover indexed sources, retrieve content, verify
-evidence and preserve provenance. Python distribution: k-web; executable: web.
+evidence and preserve provenance. Python distribution: kpihx-web; executable: web.
 The previous implementation and documentation remain under references/ for audit.
 
 ## Installation
 
-Use `make install` from a clone, or `uv tool install k-web` then `web setup`.
+Use `make install` from a clone, or `uv tool install kpihx-web` then `web setup`.
 Run `make help` for dependency installation guidance, backend health/recovery,
 testing and uninstall/purge targets. uv manages Python dependencies and uv_build
 builds the package. No Hatch backend, paid recognition provider or transcription.
@@ -236,7 +236,7 @@ tools. `make backend-purge CONFIRM=searxng` backs up named volumes under a priva
 Make recipe first. Never run global Docker prune. A clone is retained so reinstall
 works from either GitHub or GitLab. `make purge-all CONFIRM=searxng` sequences
 the confirmed backend backup/removal and app purge. Install from PyPI using
-uv tool install k-web.
+uv tool install kpihx-web.
 
 All commands use an action/timestamp/status/data envelope. Formats: table, json,
 jsonl, csv, md; --report creates escaped offline HTML or a real PDF. Autosaves are

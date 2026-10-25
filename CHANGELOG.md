@@ -1,5 +1,11 @@
 # Changelog: web (formerly xsearch)
 
+### 2.2.0 distribution-name clarification - 2026-10-25
+- Operator-approved PyPI name: kpihx-web, after PyPI rejected k-web as too similar
+  to an existing project. Executable web, import k_web, repository web, runtime
+  configuration/cache paths and HTTP user-agent remain unchanged. Build/publish,
+  metadata lookup and uninstall targets use the new distribution identity.
+
 ## [2.2.0] - 2026-10-25
 - Document every registered argument/option and every command level, including map
   subcommands, with detailed semantics/safety notes and at least three examples.

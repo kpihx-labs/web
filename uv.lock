@@ -370,7 +370,7 @@ wheels = [
 ]
 
 [[package]]
-name = "k-web"
+name = "kpihx-web"
 version = "2.2.0"
 source = { editable = "." }
 dependencies = [

@@ -1,5 +1,5 @@
 [project]
-name = "k-web"
+name = "kpihx-web"
 version = "2.2.0"
 description = "Private CLI for metasearch, verified retrieval, bounded crawling and media investigation"
 readme = "README.md"
