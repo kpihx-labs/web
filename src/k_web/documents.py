@@ -160,6 +160,14 @@ def _extract(path, ocr=False, pages=10):
 
 def compare(left, right):
     a, b = left["text"], right["text"]
+    if not a.strip() or not b.strip():
+        return {
+            "lexical_similarity": None,
+            "matching_spans": [],
+            "exact_bytes": left["sha256"] == right["sha256"],
+            "comparison_state": "insufficient_text",
+            "qualification": "No lexical conclusion: extract readable text/OCR before comparing",
+        }
     matcher = SequenceMatcher(None, a.casefold(), b.casefold(), autojunk=False)
     blocks = [
         {

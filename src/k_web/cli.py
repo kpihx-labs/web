@@ -18,6 +18,9 @@ from .audio import identify
 from .backend import BackendError, SurfaceSearcher
 from .diagnostics import diagnose
 from .documents import compare, extract
+from .help_text import ARGUMENTS as A
+from .help_text import OPTIONS as H
+from .help_text import command
 from .http import Session, WebError, save_bytes
 from .images import inspect
 from .maps import Maps, json_input, json_object, json_vertices
@@ -30,16 +33,25 @@ app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]},
+    help=command("root"),
+    rich_markup_mode="markdown",
+    pretty_exceptions_show_locals=False,
+    add_completion=False,
 )
 maps = typer.Typer(
-    help="Provider-native JSON/QL operations, not a fixed list of vehicles/tags."
+    help=command("map"),
+    no_args_is_help=True,
+    rich_markup_mode="markdown",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 app.add_typer(maps, name="map")
 
 
 @app.callback()
 def global_options(
-    version: bool = typer.Option(False, "--version", "-v", is_eager=True),
+    version: bool = typer.Option(
+        False, "--version", "-v", is_eager=True, help=H["version"]
+    ),
 ):
     if version:
         typer.echo(__version__)
@@ -88,21 +100,21 @@ def execute(action, function, fmt="table", save_dir=None, no_save=False, report=
     raise typer.Exit(code)
 
 
-@app.command()
+@app.command(help=command("search"))
 def search(
-    query: str,
-    engines: str | None = typer.Option(None, "--engines", "-e"),
+    query: str = typer.Argument(..., help=A["query"]),
+    engines: str | None = typer.Option(None, "--engines", "-e", help=H["engines"]),
     network: str | None = typer.Option(
         None,
         "--network",
         "-z",
-        help="Comma-separated configured backends; surface/onion, or custom search_backends names",
+        help=H["network"],
     ),
     rank: str = typer.Option(
         "relevance",
         "--rank",
         "-k",
-        help="relevance: term coverage then provider score; provider: score only; lexical: term coverage only",
+        help=H["rank"],
     ),
     pages: int | None = typer.Option(
         None,
@@ -110,33 +122,31 @@ def search(
         "-p",
         "--pages",
         "-P",
-        help="Maximum page requests for target collection; default search_max_pages=3. -p and -P are aliases",
+        help=H["search_pages"],
     ),
-    page: int = typer.Option(
-        1, "--start-page", "-s", help="Advanced starting page, not a page count"
-    ),
-    limit: int = typer.Option(20, "--limit", "-n"),
-    site: str | None = typer.Option(None, "--site", "-d"),
-    regex: str | None = typer.Option(None, "--regex", "-r"),
-    category: str | None = typer.Option(None, "--category", "-c"),
-    language: str = typer.Option("all", "--language", "-l"),
-    safe: int = typer.Option(0, "--safe-search", "-m"),
-    timeout: float = typer.Option(30, "--timeout", "-T"),
+    page: int = typer.Option(1, "--start-page", "-s", help=H["start_page"]),
+    limit: int = typer.Option(20, "--limit", "-n", help=H["search_limit"]),
+    site: str | None = typer.Option(None, "--site", "-d", help=H["site"]),
+    regex: str | None = typer.Option(None, "--regex", "-r", help=H["regex"]),
+    category: str | None = typer.Option(None, "--category", "-c", help=H["category"]),
+    language: str = typer.Option("all", "--language", "-l", help=H["language"]),
+    safe: int = typer.Option(0, "--safe-search", "-m", help=H["safe"]),
+    timeout: float = typer.Option(30, "--timeout", "-T", help=H["timeout"]),
     params: str | None = typer.Option(
         None,
         "--params",
         "-X",
-        help="Extra SearXNG JSON parameters or @file; raw query operators pass through unchanged",
+        help=H["search_params"],
     ),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
-    report: Path | None = typer.Option(None, "--report", "-R"),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S", help=H["save"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
+    report: Path | None = typer.Option(None, "--report", "-R", help=H["report"]),
     fresh: bool = typer.Option(
         False,
         "--fresh",
         "-F",
-        help="Force a live request, with no cached/stale fallback; respect provider limits",
+        help=H["fresh"],
     ),
 ):
     """Collect up to -n unique results, stopping at target, source exhaustion or page budget."""
@@ -169,11 +179,11 @@ def search(
     )
 
 
-@app.command()
+@app.command(help=command("engines"))
 def engines(
-    network: str = typer.Option("surface", "--network", "-z"),
-    regex: str | None = typer.Option(None, "--regex", "-r"),
-    fmt: str = typer.Option("table", "--format", "-f"),
+    network: str = typer.Option("surface", "--network", "-z", help=H["engine_network"]),
+    regex: str | None = typer.Option(None, "--regex", "-r", help=H["engine_regex"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
 ):
     """Discover configured engines; configured does not imply responding."""
 
@@ -194,22 +204,24 @@ def engines(
     execute("engines", action, fmt, no_save=True)
 
 
-@app.command()
+@app.command(help=command("fetch"))
 def fetch(
-    url: str,
-    cookies: Path | None = typer.Option(None, "--cookie-file", "-C"),
-    header: list[str] = typer.Option([], "--header", "-H"),
-    proxy: str | None = typer.Option(None, "--proxy", "-p"),
-    timeout: float = typer.Option(30, "--timeout", "-T"),
-    max_bytes: int | None = typer.Option(None, "--max-bytes", "-b"),
-    allow_private: bool = typer.Option(False, "--allow-private", "-a"),
-    download: Path | None = typer.Option(None, "--download", "-d"),
-    selector: str | None = typer.Option(None, "--selector", "-s"),
-    regex: str | None = typer.Option(None, "--regex", "-r"),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
-    report: Path | None = typer.Option(None, "--report", "-R"),
+    url: str = typer.Argument(..., help=A["url"]),
+    cookies: Path | None = typer.Option(None, "--cookie-file", "-C", help=H["cookies"]),
+    header: list[str] = typer.Option([], "--header", "-H", help=H["header"]),
+    proxy: str | None = typer.Option(None, "--proxy", "-p", help=H["proxy"]),
+    timeout: float = typer.Option(30, "--timeout", "-T", help=H["timeout"]),
+    max_bytes: int | None = typer.Option(None, "--max-bytes", "-b", help=H["bytes"]),
+    allow_private: bool = typer.Option(
+        False, "--allow-private", "-a", help=H["private"]
+    ),
+    download: Path | None = typer.Option(None, "--download", "-d", help=H["download"]),
+    selector: str | None = typer.Option(None, "--selector", "-s", help=H["selector"]),
+    regex: str | None = typer.Option(None, "--regex", "-r", help=H["fetch_regex"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S", help=H["save"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
+    report: Path | None = typer.Option(None, "--report", "-R", help=H["report"]),
 ):
     """Retrieve once, classify access walls and optionally preserve exact bytes."""
 
@@ -223,6 +235,14 @@ def fetch(
             max_bytes=max_bytes,
             allow_private=allow_private,
         ).fetch(url)
+        if selector and "html" not in record["mime"]:
+            raise WebError(
+                "CSS inspection requires HTML; use web doc for downloaded documents"
+            )
+        if regex and record["access_state"] == "binary":
+            raise WebError(
+                "Regex inspection requires extracted text; download the file then use web doc"
+            )
         if selector:
             from bs4 import BeautifulSoup
 
@@ -249,29 +269,35 @@ def fetch(
     execute("fetch", action, fmt, save_dir, no_save, report)
 
 
-@app.command()
+@app.command(help=command("crawl"))
 def crawl(
-    url: str,
-    depth: int = typer.Option(1, "--depth", "-D"),
-    max_pages: int = typer.Option(20, "--max-pages", "-n"),
-    delay: float = typer.Option(0.5, "--delay", "-w"),
-    robots: bool = typer.Option(True, "--robots/--no-robots"),
-    cookies: Path | None = typer.Option(None, "--cookie-file", "-C"),
-    header: list[str] = typer.Option([], "--header", "-H"),
-    proxy: str | None = typer.Option(None, "--proxy", "-p"),
-    allow_private: bool = typer.Option(False, "--allow-private", "-a"),
-    directory: Path | None = typer.Option(None, "--download-dir", "-d"),
-    include: str | None = typer.Option(None, "--match", "-r"),
+    url: str = typer.Argument(..., help=A["url"]),
+    depth: int = typer.Option(1, "--depth", "-D", help=H["depth"]),
+    max_pages: int = typer.Option(20, "--max-pages", "-n", help=H["crawl_pages"]),
+    delay: float = typer.Option(0.5, "--delay", "-w", help=H["delay"]),
+    robots: bool = typer.Option(
+        True, "--robots/--no-robots", "-b/-B", help=H["robots"]
+    ),
+    cookies: Path | None = typer.Option(None, "--cookie-file", "-C", help=H["cookies"]),
+    header: list[str] = typer.Option([], "--header", "-H", help=H["header"]),
+    proxy: str | None = typer.Option(None, "--proxy", "-p", help=H["proxy"]),
+    allow_private: bool = typer.Option(
+        False, "--allow-private", "-a", help=H["private"]
+    ),
+    directory: Path | None = typer.Option(
+        None, "--download-dir", "-d", help=H["download_dir"]
+    ),
+    include: str | None = typer.Option(None, "--match", "-r", help=H["crawl_match"]),
     exclude: str | None = typer.Option(
         None,
         "--exclude",
         "-x",
-        help="URL exclusion regex; default guards common state-changing GET links; empty disables after review",
+        help=H["exclude"],
     ),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
-    report: Path | None = typer.Option(None, "--report", "-R"),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S", help=H["save"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
+    report: Path | None = typer.Option(None, "--report", "-R", help=H["report"]),
 ):
     """Bounded same-host crawl, robots-aware and paced; no browser/JS execution."""
     execute(
@@ -300,20 +326,20 @@ def crawl(
     )
 
 
-@app.command()
+@app.command(help=command("doc"))
 def doc(
-    path: Path,
-    other: list[Path] = typer.Option([], "--compare", "-c"),
-    ocr: bool = typer.Option(False, "--ocr", "-O"),
-    pages: int = typer.Option(10, "--pages", "-p"),
-    online: bool = typer.Option(False, "--online", "-o"),
-    query_mode: str = typer.Option("exact", "--query-mode", "-q"),
-    samples: int = typer.Option(3, "--samples", "-s"),
-    limit: int = typer.Option(5, "--limit", "-n"),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
-    report: Path | None = typer.Option(None, "--report", "-R"),
+    path: Path = typer.Argument(..., help=A["document"]),
+    other: list[Path] = typer.Option([], "--compare", "-c", help=H["compare"]),
+    ocr: bool = typer.Option(False, "--ocr", "-O", help=H["ocr"]),
+    pages: int = typer.Option(10, "--pages", "-p", help=H["doc_pages"]),
+    online: bool = typer.Option(False, "--online", "-o", help=H["online_doc"]),
+    query_mode: str = typer.Option("exact", "--query-mode", "-q", help=H["query_mode"]),
+    samples: int = typer.Option(3, "--samples", "-s", help=H["samples"]),
+    limit: int = typer.Option(5, "--limit", "-n", help=H["doc_limit"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S", help=H["save"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
+    report: Path | None = typer.Option(None, "--report", "-R", help=H["report"]),
 ):
     """Inspect offline by default; online quotes disclose selected document text."""
 
@@ -326,6 +352,10 @@ def doc(
         result["comparisons"] = [
             {"other": str(p), **compare(result, extract(p, ocr, pages))} for p in other
         ]
+        result["partial"] = bool(result["empty_or_scanned"]) or any(
+            item.get("comparison_state") == "insufficient_text"
+            for item in result["comparisons"]
+        )
         if online:
             paragraphs = [
                 line for line in result["text"].splitlines() if len(line.split()) >= 8
@@ -333,21 +363,65 @@ def doc(
             selected = paragraphs[:: max(1, len(paragraphs) // max(1, samples))][
                 :samples
             ]
-            candidates, verified, errors = {}, [], []
+            candidates, verified, errors, searches = {}, [], [], []
+            if not selected:
+                errors.append(
+                    {
+                        "stage": "discovery",
+                        "error": "No significant readable fragments; check the page budget or enable local OCR. No online query was made",
+                    }
+                )
             for quote in selected:
                 query = " ".join(quote.split()[:15]).replace('"', "")
-                found = asyncio.run(
-                    search_web(
-                        '"' + query + '"' if query_mode == "exact" else query,
-                        limit=limit,
-                        persist=not no_save,
+                try:
+                    found = asyncio.run(
+                        search_web(
+                            '"' + query + '"' if query_mode == "exact" else query,
+                            limit=limit,
+                            persist=not no_save,
+                        )
                     )
+                except (WebError, BackendError) as error:
+                    errors.append(
+                        {"stage": "discovery", "query": query, "error": str(error)}
+                    )
+                    continue
+                searches.append(
+                    {key: value for key, value in found.items() if key != "results"}
                 )
                 for row in found["results"]:
                     candidates[row["url"]] = row
             for url in list(candidates)[:limit]:
                 try:
                     page, body = Session(url).fetch(url)
+                    if page["access_state"] not in {"ok", "binary"}:
+                        verified.append(
+                            {
+                                "url": url,
+                                "access_state": page["access_state"],
+                                "verification": "not_checked_access_wall",
+                            }
+                        )
+                        errors.append(
+                            {
+                                "stage": "verification",
+                                "url": url,
+                                "error": "Access wall: page content was not compared. Use an authorized browser independently",
+                            }
+                        )
+                        continue
+                    if (
+                        page["access_state"] == "binary"
+                        and page["mime"] != "application/pdf"
+                    ):
+                        errors.append(
+                            {
+                                "stage": "verification",
+                                "url": url,
+                                "error": "Unsupported binary candidate; download/inspect it explicitly",
+                            }
+                        )
+                        continue
                     candidate = {"text": page["text"], "sha256": page["sha256"]}
                     if page["mime"] == "application/pdf":
                         with tempfile.TemporaryDirectory(
@@ -356,11 +430,28 @@ def doc(
                             target = Path(folder) / "candidate.pdf"
                             target.write_bytes(body)
                             candidate = extract(target, ocr, pages)
+                    comparison = compare(result, candidate)
+                    if comparison["exact_bytes"]:
+                        verification = "exact_file"
+                    elif comparison.get("comparison_state") == "insufficient_text":
+                        verification = "insufficient_text"
+                        errors.append(
+                            {
+                                "stage": "verification",
+                                "url": url,
+                                "error": "No readable comparison text; inspect the download or enable local OCR for a scanned PDF",
+                            }
+                        )
+                    elif comparison["matching_spans"]:
+                        verification = "lexical_overlap"
+                    else:
+                        verification = "no_significant_lexical_overlap"
                     verified.append(
                         {
                             "url": url,
                             "access_state": page["access_state"],
-                            **compare(result, candidate),
+                            "verification": verification,
+                            **comparison,
                         }
                     )
                 except WebError as error:
@@ -369,34 +460,46 @@ def doc(
                 queries_disclosed=len(selected),
                 candidates=list(candidates.values()),
                 verified_candidates=verified,
+                matching_candidates=[
+                    item
+                    for item in verified
+                    if item.get("verification") in {"exact_file", "lexical_overlap"}
+                ],
                 errors=errors,
-                partial=bool(errors),
+                searches=searches,
+                partial=result["partial"]
+                or bool(errors)
+                or any(item.get("partial", False) for item in searches),
             )
         return result
 
     execute("doc", action, fmt, save_dir, no_save, report)
 
 
-@app.command()
+@app.command(help=command("image"))
 def image(
-    path: str,
-    online: bool = typer.Option(False, "--online", "-o"),
+    path: str = typer.Argument(..., help=A["image"]),
+    online: bool = typer.Option(False, "--online", "-o", help=H["online_image"]),
     text_search: bool = typer.Option(
         False,
         "--text-search",
         "-t",
-        help="Explicitly search locally OCR-extracted words as text candidates",
+        help=H["text_search"],
     ),
-    engines: str = typer.Option("yandex", "--engines", "-e"),
-    limit: int = typer.Option(10, "--limit", "-n"),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    save_dir: Path | None = typer.Option(None, "--save-dir", "-S"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
-    report: Path | None = typer.Option(None, "--report", "-R"),
+    engines: str = typer.Option("yandex", "--engines", "-e", help=H["image_engines"]),
+    limit: int = typer.Option(10, "--limit", "-n", help=H["image_limit"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    save_dir: Path | None = typer.Option(None, "--save-dir", "-S", help=H["save"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
+    report: Path | None = typer.Option(None, "--report", "-R", help=H["report"]),
 ):
     """Inspect EXIF locally; --online explicitly uploads pixels without original EXIF."""
 
     def action():
+        if text_search and not online:
+            raise WebError(
+                "--text-search discloses OCR words; explicitly add --online or omit --text-search"
+            )
         if urlsplit(path).scheme in {"http", "https"}:
             _, _, body = Session(path).get(path)
             with tempfile.TemporaryDirectory(prefix="web-image-input-") as folder:
@@ -433,16 +536,16 @@ def image(
     )
 
 
-@app.command()
+@app.command(help=command("audio"))
 def audio(
-    path: Path | None = typer.Argument(None),
-    record: float | None = typer.Option(None, "--record", "-r"),
-    mode: str = typer.Option("recording", "--mode", "-m"),
-    duration: float = typer.Option(12, "--duration", "-d"),
-    source: str = typer.Option("default", "--source", "-s"),
-    offset: float = typer.Option(0, "--offset", "-O"),
-    fmt: str = typer.Option("table", "--format", "-f"),
-    no_save: bool = typer.Option(False, "--no-save", "-N"),
+    path: Path | None = typer.Argument(None, help=A["audio"]),
+    record: float | None = typer.Option(None, "--record", "-r", help=H["record"]),
+    mode: str = typer.Option("recording", "--mode", "-m", help=H["audio_mode"]),
+    duration: float = typer.Option(12, "--duration", "-d", help=H["duration"]),
+    source: str = typer.Option("default", "--source", "-s", help=H["source"]),
+    offset: float = typer.Option(0, "--offset", "-O", help=H["offset"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
+    no_save: bool = typer.Option(False, "--no-save", "-N", help=H["no_save"]),
 ):
     """Free fingerprint identification; hum attempts have no melody-recognition guarantee."""
     execute(
@@ -453,12 +556,12 @@ def audio(
     )
 
 
-@app.command()
+@app.command(help=command("similar"))
 def similar(
-    url: str,
-    engines: str | None = typer.Option(None, "--engines", "-e"),
-    limit: int = typer.Option(10, "--limit", "-n"),
-    fmt: str = typer.Option("table", "--format", "-f"),
+    url: str = typer.Argument(..., help=A["site_url"]),
+    engines: str | None = typer.Option(None, "--engines", "-e", help=H["engines"]),
+    limit: int = typer.Option(10, "--limit", "-n", help=H["similar_limit"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
 ):
     """Alternatives discovery query, explicitly NOT a semantic embeddings API."""
 
@@ -473,10 +576,10 @@ def similar(
     execute("similar", action, fmt)
 
 
-@app.command()
+@app.command(help=command("doctor"))
 def doctor(
-    live: bool = typer.Option(False, "--live", "-l"),
-    fmt: str = typer.Option("table", "--format", "-f"),
+    live: bool = typer.Option(False, "--live", "-l", help=H["live"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
 ):
     def action():
         result = asyncio.run(
@@ -489,8 +592,8 @@ def doctor(
     execute("doctor", action, fmt, no_save=True)
 
 
-@app.command()
-def capabilities(fmt: str = typer.Option("table", "--format", "-f")):
+@app.command(help=command("capabilities"))
+def capabilities(fmt: str = typer.Option("table", "--format", "-f", help=H["format"])):
     execute(
         "capabilities",
         lambda: {
@@ -510,13 +613,13 @@ def capabilities(fmt: str = typer.Option("table", "--format", "-f")):
     )
 
 
-@app.command()
+@app.command(help=command("setup"))
 def setup():
     typer.echo(initialize())
 
 
-@app.command()
-def purge(yes: bool = typer.Option(False, "--yes", "-y")):
+@app.command(help=command("purge"))
+def purge(yes: bool = typer.Option(False, "--yes", "-y", help=H["confirm_purge"])):
     """Preview or trash owned runtime data only; never source/shared dependencies."""
     if yes:
         gateway = Path(settings()["searxng_socket"])
@@ -555,11 +658,11 @@ def purge(yes: bool = typer.Option(False, "--yes", "-y")):
         )
 
 
-@maps.command("search")
+@maps.command("search", help=command("map_search"))
 def map_search(
-    query: str,
-    params: str | None = typer.Option(None, "--params", "-P"),
-    fmt: str = typer.Option("table", "--format", "-f"),
+    query: str = typer.Argument(..., help=A["place"]),
+    params: str | None = typer.Option(None, "--params", "-P", help=H["map_params"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["format"]),
 ):
     execute(
         "map-search",
@@ -571,8 +674,11 @@ def map_search(
     )
 
 
-@maps.command("query")
-def map_query(query: str, fmt: str = typer.Option("json", "--format", "-f")):
+@maps.command("query", help=command("map_query"))
+def map_query(
+    query: str = typer.Argument(..., help=A["overpass"]),
+    fmt: str = typer.Option("json", "--format", "-f", help=H["format"]),
+):
     execute(
         "map-query",
         lambda: {
@@ -585,12 +691,12 @@ def map_query(query: str, fmt: str = typer.Option("json", "--format", "-f")):
     )
 
 
-@maps.command("route")
+@maps.command("route", help=command("map_route"))
 def map_route(
-    vertices: str,
-    profile: str | None = typer.Option(None, "--profile", "-p"),
-    params: str | None = typer.Option(None, "--params", "-P"),
-    fmt: str = typer.Option("json", "--format", "-f"),
+    vertices: str = typer.Argument(..., help=A["vertices"]),
+    profile: str | None = typer.Option(None, "--profile", "-p", help=H["profile"]),
+    params: str | None = typer.Option(None, "--params", "-P", help=H["map_params"]),
+    fmt: str = typer.Option("json", "--format", "-f", help=H["format"]),
 ):
     execute(
         "map-route",
@@ -604,13 +710,13 @@ def map_route(
     )
 
 
-@maps.command("request")
+@maps.command("request", help=command("map_request"))
 def map_request(
-    endpoint: str,
-    method: str = typer.Option("GET", "--method", "-X"),
-    params: str | None = typer.Option(None, "--params", "-P"),
-    body: str | None = typer.Option(None, "--body", "-b"),
-    fmt: str = typer.Option("json", "--format", "-f"),
+    endpoint: str = typer.Argument(..., help=A["endpoint"]),
+    method: str = typer.Option("GET", "--method", "-X", help=H["method"]),
+    params: str | None = typer.Option(None, "--params", "-P", help=H["map_params"]),
+    body: str | None = typer.Option(None, "--body", "-b", help=H["body"]),
+    fmt: str = typer.Option("json", "--format", "-f", help=H["format"]),
 ):
     execute(
         "map-request",
@@ -630,8 +736,11 @@ def main():
     app()
 
 
-@app.command()
-def show(path: Path, fmt: str = typer.Option("table", "--format", "-f")):
+@app.command(help=command("show"))
+def show(
+    path: Path = typer.Argument(..., help=A["snapshot"]),
+    fmt: str = typer.Option("table", "--format", "-f", help=H["show_format"]),
+):
     """Render the SAME saved snapshot as table or JSON, with no network requests."""
     try:
         record = json.loads(path.read_text())
@@ -654,11 +763,11 @@ def show(path: Path, fmt: str = typer.Option("table", "--format", "-f")):
         raise typer.Exit(2) from None
 
 
-@app.command()
+@app.command(help=command("archive"))
 def archive(
-    url: str,
-    params: str | None = typer.Option(None, "--params", "-P"),
-    fmt: str = typer.Option("json", "--format", "-f"),
+    url: str = typer.Argument(..., help=A["archive_url"]),
+    params: str | None = typer.Option(None, "--params", "-P", help=H["archive_params"]),
+    fmt: str = typer.Option("json", "--format", "-f", help=H["format"]),
 ):
     """Explicit Wayback closest-snapshot lookup; no automatic document URL disclosure."""
 

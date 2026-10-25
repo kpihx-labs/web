@@ -1,6 +1,6 @@
 [project]
 name = "k-web"
-version = "2.1.0"
+version = "2.2.0"
 description = "Private CLI for metasearch, verified retrieval, bounded crawling and media investigation"
 readme = "README.md"
 license = {text = "MIT"}

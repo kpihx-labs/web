@@ -57,3 +57,20 @@ Third-party blocking, rate limits, stale indexes and future availability are not
 under this client's control. No perfect anonymity, universal access-control
 bypass, semantic plagiarism verdict or complete digital-footprint inventory is
 claimed. Tests of fake data validate mechanisms, not universal provider quality.
+
+## 2.2 help and inspection verification (2026-10-25)
+
+`make check`: Ruff lint/format, Pyright and 60 tests. The help audit recursively
+inspects all 20 command levels, validates every argument/option description and
+alias, renders at widths 80/110 without ellipses, and parses all 60 examples
+without invoking their callbacks. Investigation regressions cover all-query
+failure with retained local text, partial discovery, auth-wall non-comparison,
+absent significant text, empty-text comparison and OCR text-search failure.
+
+Two bounded public fixtures disclosed one sampled fragment each. The first
+retained 158 characters with an unrelated service-public candidate and no lexical
+spans. The second retained 120 characters with a Python Wikipedia candidate,
+explicit no_significant_lexical_overlap and zero matching_candidates. Both
+retained partial search coverage instead of claiming a complete clean audit.
+Polytechnique geocoding returned its expected place. The built 2.2 wheel passed
+isolated install/setup/purge/uninstall; actual user data/backend stayed intact.

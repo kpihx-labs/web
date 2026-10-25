@@ -65,3 +65,23 @@ Setup never overwrites user configuration. Uninstall retains evidence. Purge
 previews/trashes owned runtime paths only, retaining source/shared native tools.
 Backend stop retains volumes; backend-purge requires confirmation and a backup.
 No query silently changes a VPN, firewall, browser session or service state.
+
+## 2.2 transparent-help and investigation amendment
+
+Every registered command/group must explain its actual purpose, boundaries and
+at least three varied examples in --help. Every argument and explicit long/short
+option must have an illustrated description. Recursive tests apply to new levels
+as well as current map subcommands. Help must not query providers, mutate runtime
+data, record media or inspect input files.
+
+The earlier sentence "Changing output limit alone does not fetch further pages"
+is superseded by 2.1 target collection: a higher target can request more pages
+within the same configured/requested page budget. Targets are never guaranteed.
+
+Document discovery failure/partial coverage must retain local inspection and
+remain partial in the final envelope. Access walls are not compared as source
+documents. Checked candidates are explicitly classified as exact-file overlap,
+lexical overlap, no significant lexical overlap or inaccessible; only the first
+two enter matching_candidates, neither being a plagiarism verdict. Empty text
+cannot yield a lexical similarity score. Optional image text-discovery failures
+likewise retain metadata and any other usable candidates.

@@ -22,6 +22,29 @@ make -C web backend-up
 web doctor --live
 ```
 
+## Discover the CLI without guessing (2.2)
+
+Every command level has a purpose/limits explanation, at least three varied
+examples, and descriptions with examples for every argument and long/short flag.
+The help is offline: it does not query providers, record audio, inspect files or
+purge state. Explore the whole tree, including map's distinct API operations:
+
+```sh
+web --help
+web search --help
+web doc --help
+web map --help
+web map search --help
+web map query --help
+web map route --help
+web map request --help
+```
+
+The recursive help contract and example parser tests fail if a new command ships
+an undocumented option, missing short/long alias, or fewer than three examples.
+Generated help remains English, like the code. Detailed shared descriptions live
+in help_text.py, with explicit references at each Typer declaration.
+
 ## Search precision, budgets and provenance
 
 ```sh

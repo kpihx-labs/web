@@ -1,5 +1,17 @@
 # Changelog: web (formerly xsearch)
 
+## [2.2.0] - 2026-10-25
+- Document every registered argument/option and every command level, including map
+  subcommands, with detailed semantics/safety notes and at least three examples.
+- Add recursive documentation/alias completeness tests and parse every published
+  example through the real CLI without invoking its callback.
+- Preserve local doc inspection when individual online searches fail; propagate
+  partial coverage and classify inaccessible/unrelated candidates without claiming
+  they are matching documents. Empty text does not score as a perfect comparison.
+- Preserve image metadata when OCR text discovery fails. Reject silently ignored
+  option combinations (text-search without online, CSS on binary/non-HTML, crawl
+  match without a download directory) with explicit recovery instructions.
+
 ## [2.1.0] - 2026-10-25
 - Correct everyday search UX: -n is a target; -p/-P are page-request-budget aliases;
   --start-page is explicit. Stop at target and report exact shortfall/reason.

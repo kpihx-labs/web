@@ -475,6 +475,10 @@ def crawl(
 ):
     if depth < 0 or max_pages < 1 or delay < 0 or not math.isfinite(delay):
         raise WebError("depth/delay must be nonnegative and max-pages positive")
+    if include and directory is None:
+        raise WebError(
+            "--match filters saved bodies; add --download-dir or omit --match. It does not filter traversal/display"
+        )
     host = urlsplit(url).hostname
     session.allowed_host = host
     matcher = re.compile(include) if include else None

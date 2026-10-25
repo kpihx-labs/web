@@ -155,6 +155,23 @@ def render(record):
                 data.get("selected_text", data.get("matches", data["text"][:2000]))
             )
         )
+        if "queries_disclosed" in data:
+            console.print(
+                terminal_text(
+                    f"Online quotes disclosed: {data['queries_disclosed']}; discovery candidates: {len(data.get('candidates', []))}; checked candidates: {len(data.get('verified_candidates', []))}; lexical/byte overlap candidates: {len(data.get('matching_candidates', []))}. This is not a plagiarism verdict."
+                )
+            )
+            partial_searches = sum(
+                bool(item.get("partial")) for item in data.get("searches", [])
+            )
+            if partial_searches:
+                console.print(
+                    terminal_text(
+                        f"Partial discovery searches: {partial_searches}. Inspect -f json for provider/snapshot details."
+                    )
+                )
+        if data.get("errors"):
+            console.print(JSON.from_data({"errors": data["errors"]}))
     elif record["action"] == "audio":
         track = data.get("result", {}).get("track", {})
         console.print(

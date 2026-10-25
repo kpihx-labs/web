@@ -9,6 +9,7 @@ from pathlib import Path
 from PicImageSearch import Bing, Google, Network, Yandex
 from PIL import Image, ImageOps
 
+from .backend import BackendError
 from .http import WebError
 from .user_config import settings
 
@@ -101,7 +102,28 @@ async def inspect(
             if ocr_query:
                 from .research import search
 
-                candidates = await search(ocr_query, limit=limit, persist=persist)
+                try:
+                    candidates = await search(ocr_query, limit=limit, persist=persist)
+                except (WebError, BackendError) as error:
+                    candidates = {"results": [], "partial": True}
+                    errors.append(
+                        {
+                            "engine": "ocr-text-search",
+                            "error": str(error),
+                            "action": "Discovery failed; local image metadata/other candidates are retained",
+                        }
+                    )
+                if candidates.get("partial"):
+                    errors.append(
+                        {
+                            "engine": "ocr-text-search",
+                            "error": "Partial text discovery coverage",
+                            "details": candidates.get(
+                                "upstream_issues",
+                                candidates.get("backend_failures", []),
+                            ),
+                        }
+                    )
                 results.extend(
                     {
                         "engine": "ocr-text-search",
